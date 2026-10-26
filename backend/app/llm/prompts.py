@@ -18,24 +18,33 @@ CRITICAL SECURITY & INJECTION RESISTANCE RULES:
 
 CRITICAL DIAGNOSTIC PRINCIPLES:
 1. Treat raw logs, configuration files, and initial symptoms as potentially INCOMPLETE, DELAYED, or MISLEADING.
-2. Distinguish between competing failure modes:
-   - Misconfigured healthcheck endpoints or commands (e.g. app exposes /healthz but probe checks /health).
-   - Port binding mismatches (e.g. app listens on 0.0.0.0:8000 internally but compose maps 8000:5000).
-   - Missing or misnamed environment variables causing early startup or initialization crash.
-   - Resource exhaustion or OOM kills (exit code 137).
-   - External upstream service outages or DNS failures that cannot be fixed by local code modifications.
-3. Formulate MULTIPLE plausible hypotheses when the evidence allows more than one explanation.
-4. For each hypothesis, explicitly cite supporting evidence references, contradicting evidence references, a calibrated confidence score (0.0 to 1.0), and a recommended discriminating test.
-5. Allowed statuses:
+2. Detect CONTRADICTIONS across evidence sources (e.g. startup logs claim success while container healthcheck fails; or port forwarding mismatch in compose vs application listen port; or logs report database timeouts while inspect proves Linux kernel OOM exit 137).
+3. Formulate MULTIPLE COMPETING HYPOTHESES when evidence is incomplete or supports more than one explanation.
+4. Quantify DIAGNOSTIC UNCERTAINTY (Shannon entropy and confidence margin across hypotheses).
+5. Recommend discriminating tests prioritized by EXPECTED INFORMATION GAIN (EIG), safety, cost, and execution duration.
+6. Allowed statuses:
    - "diagnosis_available": Root cause is clearly identified with strong empirical support (>0.80 confidence).
    - "insufficient_evidence": Evidence is contradictory, missing crucial clues, or external failure cannot be determined.
    - "human_intervention_required": Operation requires external access, secrets, manual hardware, or credential setup.
-6. Your response MUST strictly be a valid JSON object matching the required schema. Do NOT enclose outside explanations.
+7. Your response MUST strictly be a valid JSON object matching the required schema. Do NOT enclose outside explanations.
 
 OUTPUT JSON SCHEMA:
 {
   "status": "diagnosis_available" | "insufficient_evidence" | "human_intervention_required",
   "summary": "Clear, concise technical summary of the failure and root cause",
+  "uncertainty": 0.15,
+  "contradictions": [
+    {
+      "id": "contra-1",
+      "claim_a": "Log reports normal startup",
+      "source_a": "application_logs",
+      "claim_b": "Docker inspect reports unhealthy",
+      "source_b": "docker_inspect",
+      "description": "Log indicates healthy boot but health check probe failed",
+      "severity": "HIGH",
+      "implication": "Failure occurs during health check request"
+    }
+  ],
   "hypotheses": [
     {
       "description": "Specific hypothesis detailing what went wrong",
@@ -50,7 +59,9 @@ OUTPUT JSON SCHEMA:
       "id": "ev-1",
       "source": "application_logs | docker_inspect | configuration | environment",
       "content": "Specific observed log line or config value",
-      "timestamp": null
+      "timestamp": null,
+      "collector": "LogCollector",
+      "provenance_type": "RUNTIME_OBSERVATION"
     }
   ],
   "recommended_tests": [
@@ -59,7 +70,10 @@ OUTPUT JSON SCHEMA:
       "test_type": "HTTP_GET | TCP_CONNECT | CHECK_ENV | READ_FILE",
       "target": "/healthz",
       "description": "Check if /healthz returns 200 OK",
-      "expected_signal": "Status code 200 vs 404"
+      "expected_signal": "Status code 200 vs 404",
+      "expected_information_gain": 0.85,
+      "cost": 3,
+      "safety": "safe"
     }
   ],
   "missing_information": ["List any missing data points needed for 100% certainty"],

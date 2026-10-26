@@ -34,6 +34,10 @@ class EvidenceItem(BaseModel):
     content: str = Field(..., description="Raw text or structured JSON string of the evidence")
     metadata: Dict[str, Any] = Field(default_factory=dict)
     is_initial: bool = Field(default=False, description="True if collected before hypothesis generation")
+    collector: Optional[str] = Field(default=None, description="Collector module or probe runner that gathered this evidence")
+    target: Optional[str] = Field(default=None, description="Resource or file target")
+    fingerprint: Optional[str] = Field(default=None, description="SHA256 fingerprint of evidence content")
+    provenance_type: Optional[str] = Field(default=None, description="STATIC_ANALYSIS, RUNTIME_OBSERVATION, ACTIVE_PROBE, etc.")
 
 
 class HypothesisCategory(str, Enum):
@@ -205,6 +209,20 @@ class DiagnosisStatus(str, Enum):
     HUMAN_INTERVENTION_REQUIRED = "human_intervention_required"
 
 
+class ContradictionReport(BaseModel):
+    """Contradiction detected between two pieces of evidence or observations."""
+    id: str = Field(..., description="Unique contradiction identifier, e.g. contra-1")
+    claim_a: str = Field(..., description="First claim or observation")
+    source_a: str = Field(..., description="Source of first observation")
+    evidence_id_a: Optional[str] = Field(default=None, description="Optional ID of first evidence item")
+    claim_b: str = Field(..., description="Second conflicting claim or observation")
+    source_b: str = Field(..., description="Source of second observation")
+    evidence_id_b: Optional[str] = Field(default=None, description="Optional ID of second evidence item")
+    description: str = Field(..., description="Nature of the contradiction")
+    severity: str = Field(default="HIGH", description="Severity: HIGH, MEDIUM, LOW")
+    implication: str = Field(default="", description="Diagnostic implication of this contradiction")
+
+
 class DiagnoseHypothesis(BaseModel):
     """Individual root-cause hypothesis with evidence references and confidence."""
     description: str = Field(..., description="Description of the proposed root cause hypothesis")
@@ -212,14 +230,21 @@ class DiagnoseHypothesis(BaseModel):
     contradicting_evidence: List[str] = Field(default_factory=list, description="References to contradicting evidence")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence level between 0.0 and 1.0")
     recommended_discriminating_test: Optional[str] = Field(default=None, description="Recommended discriminating test")
+    id: Optional[str] = Field(default=None, description="Hypothesis identifier, e.g. hyp-1")
+    category: Optional[HypothesisCategory] = Field(default=None, description="Category classification")
+    uncertainty: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Uncertainty metric for this hypothesis")
 
 
 class EvidenceRecord(BaseModel):
-    """Record of observed system evidence."""
+    """Record of observed system evidence with full provenance."""
     id: str = Field(..., description="Unique ID for this evidence record, e.g. ev-1")
     source: str = Field(..., description="Source of evidence: logs, inspect, env, config, etc.")
     content: str = Field(..., description="Content or summary of observed evidence")
     timestamp: Optional[str] = Field(default=None, description="ISO timestamp if available")
+    collector: Optional[str] = Field(default=None, description="Collector that gathered this evidence")
+    target: Optional[str] = Field(default=None, description="Target resource or file")
+    fingerprint: Optional[str] = Field(default=None, description="SHA256 fingerprint of evidence content")
+    provenance_type: Optional[str] = Field(default=None, description="Provenance category: STATIC, RUNTIME, ACTIVE_PROBE")
 
 
 class RecommendTest(BaseModel):
@@ -229,6 +254,10 @@ class RecommendTest(BaseModel):
     target: str = Field(..., description="Target endpoint, port, variable, or file")
     description: str = Field(..., description="Explanation of what this test verifies")
     expected_signal: str = Field(..., description="Signal indicating positive or negative outcome")
+    expected_information_gain: Optional[float] = Field(default=None, description="Expected Information Gain (EIG)")
+    cost: Optional[int] = Field(default=None, description="Resource cost of executing this test")
+    safety: Optional[str] = Field(default="safe", description="Safety tier: safe or disruptive")
+    estimated_duration_ms: Optional[int] = Field(default=None, description="Estimated execution time in milliseconds")
 
 
 class DiagnoseResponse(BaseModel):
@@ -241,6 +270,8 @@ class DiagnoseResponse(BaseModel):
     missing_information: List[str] = Field(default_factory=list)
     confidence: float = Field(..., ge=0.0, le=1.0, description="Overall confidence level between 0.0 and 1.0")
     next_action: str
+    uncertainty: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Estimated diagnostic uncertainty (entropy/margin)")
+    contradictions: List[ContradictionReport] = Field(default_factory=list, description="Contradictions detected across evidence")
 
 
 class DiagnoseRequest(BaseModel):

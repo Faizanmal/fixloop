@@ -8,6 +8,7 @@ Enforces:
 """
 
 from __future__ import annotations
+import os
 import socket
 import time
 from abc import ABC, abstractmethod
@@ -38,6 +39,7 @@ class BaseDiagnosticTool(ABC):
     cost: int
     safety: str  # "safe" or "disruptive"
     description: str
+    estimated_duration_ms: int = 100
 
     @abstractmethod
     async def execute(
@@ -57,6 +59,7 @@ class ToolProbeHTTP(BaseDiagnosticTool):
     cost = 3
     safety = "safe"
     description = "Sends an HTTP GET request to check response code, headers, and body snippet."
+    estimated_duration_ms = 150
 
     async def execute(
         self,
@@ -156,6 +159,7 @@ class ToolProbeTCP(BaseDiagnosticTool):
     cost = 2
     safety = "safe"
     description = "Tests socket TCP connectivity on a specific port."
+    estimated_duration_ms = 80
 
     async def execute(
         self,
@@ -237,6 +241,7 @@ class ToolCheckEnvKey(BaseDiagnosticTool):
     cost = 1
     safety = "safe"
     description = "Verifies environment variable presence without disclosing secret values."
+    estimated_duration_ms = 20
 
     async def execute(
         self,
@@ -298,6 +303,7 @@ class ToolReadApprovedFile(BaseDiagnosticTool):
     cost = 1
     safety = "safe"
     description = "Reads approved configuration or source file within project boundaries."
+    estimated_duration_ms = 30
 
     async def execute(
         self,

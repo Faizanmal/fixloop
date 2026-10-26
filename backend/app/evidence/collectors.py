@@ -11,7 +11,7 @@ Collects and normalizes evidence from:
 Enforces strict boundary validation: never inspects arbitrary filesystem paths.
 """
 
-from __future__ import annotations
+import hashlib
 import json
 import os
 import re
@@ -24,6 +24,11 @@ from backend.app.core.models import (
     EvidenceType,
     utc_now,
 )
+
+
+def compute_fingerprint(content: str) -> str:
+    """Computes a deterministic SHA256 hex digest snippet for evidence provenance."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
 # Common sensitive variable names that must always have their values masked
 SENSITIVE_KEY_PATTERNS = re.compile(
@@ -101,28 +106,38 @@ class LogCollector:
         error_lines = [l for l in lines if any(k in l.upper() for k in ["ERROR", "CRITICAL", "EXCEPTION", "TRACEBACK", "FAIL"])]
 
         items = []
+        tail_content = "\n".join(lines[-50:])
         # Item 1: Complete log tail
         items.append(
             EvidenceItem(
                 id=f"ev-log-tail",
                 type=EvidenceType.LOGS,
                 source=source_label,
-                content="\n".join(lines[-50:]),
+                content=tail_content,
                 metadata={"total_lines": len(lines), "has_errors": bool(error_lines)},
                 is_initial=True,
+                collector="LogCollector",
+                target=source_label,
+                fingerprint=compute_fingerprint(tail_content),
+                provenance_type="RUNTIME_OBSERVATION",
             )
         )
 
         # Item 2: Explicit error extracts if present
         if error_lines:
+            err_content = "\n".join(error_lines[:15])
             items.append(
                 EvidenceItem(
                     id=f"ev-log-errors",
                     type=EvidenceType.LOGS,
                     source=f"{source_label}:extracted_errors",
-                    content="\n".join(error_lines[:15]),
+                    content=err_content,
                     metadata={"error_count": len(error_lines)},
                     is_initial=True,
+                    collector="LogCollector",
+                    target=f"{source_label}:errors",
+                    fingerprint=compute_fingerprint(err_content),
+                    provenance_type="RUNTIME_OBSERVATION",
                 )
             )
 
@@ -131,6 +146,18 @@ class LogCollector:
 
 class DockerStateCollector:
     """Extracts container status, exit codes, healthchecks, and port bindings."""
+
+    @classmethod
+    def collect_from_json(cls, json_text: str, source_label: str = "docker.inspect") -> List[EvidenceItem]:
+        """Parses docker inspect JSON string and extracts EvidenceItems."""
+        if not json_text or not json_text.strip():
+            return []
+        try:
+            data = json.loads(json_text)
+            return cls.collect_from_dict(data, source_label=source_label)
+        except Exception as exc:
+            logger.warning("Failed parsing docker inspect JSON: %s", exc)
+            return []
 
     @staticmethod
     def collect_from_dict(inspect_data: Any, source_label: str = "docker.inspect") -> List[EvidenceItem]:
@@ -163,27 +190,37 @@ class DockerStateCollector:
             "published_ports": network_settings.get("Ports", {}),
         }
 
+        state_content = json.dumps(summary, indent=2)
         items.append(
             EvidenceItem(
                 id="ev-docker-state",
                 type=EvidenceType.DOCKER_INSPECT,
                 source=source_label,
-                content=json.dumps(summary, indent=2),
+                content=state_content,
                 metadata=summary,
                 is_initial=True,
+                collector="DockerStateCollector",
+                target="docker_inspect:State",
+                fingerprint=compute_fingerprint(state_content),
+                provenance_type="CONTAINER_METADATA",
             )
         )
 
         if health_log:
             last_check = health_log[-1]
+            hl_content = f"ExitCode: {last_check.get('ExitCode')}, Output: {last_check.get('Output', '').strip()}"
             items.append(
                 EvidenceItem(
                     id="ev-docker-healthlog",
                     type=EvidenceType.DOCKER_INSPECT,
                     source=f"{source_label}:health_log",
-                    content=f"ExitCode: {last_check.get('ExitCode')}, Output: {last_check.get('Output', '').strip()}",
+                    content=hl_content,
                     metadata={"exit_code": last_check.get("ExitCode")},
                     is_initial=True,
+                    collector="DockerStateCollector",
+                    target="docker_inspect:HealthLog",
+                    fingerprint=compute_fingerprint(hl_content),
+                    provenance_type="CONTAINER_METADATA",
                 )
             )
 
@@ -240,14 +277,19 @@ class ComposeConfigCollector:
                 "declared_env_keys": env_keys,
             }
 
+            compose_content = json.dumps(spec, indent=2)
             items.append(
                 EvidenceItem(
                     id=f"ev-compose-{svc_name}",
                     type=EvidenceType.COMPOSE_CONFIG,
                     source=f"{source_label}:{svc_name}",
-                    content=json.dumps(spec, indent=2),
+                    content=compose_content,
                     metadata=spec,
                     is_initial=True,
+                    collector="ComposeConfigCollector",
+                    target=f"docker-compose.yml:{svc_name}",
+                    fingerprint=compute_fingerprint(compose_content),
+                    provenance_type="STATIC_ANALYSIS",
                 )
             )
 
@@ -280,14 +322,19 @@ class SourceCodeCollector:
                     "routes": list(dict.fromkeys(discovered_routes)),
                     "ports": list(dict.fromkeys(discovered_ports)),
                 }
+                src_content = f"File '{filename}' declares routes: {meta['routes']} and ports: {meta['ports']}"
                 items.append(
                     EvidenceItem(
                         id=f"ev-src-{Path(filename).stem}",
                         type=EvidenceType.SOURCE_CODE,
                         source=f"{source_label}:{filename}",
-                        content=f"File '{filename}' declares routes: {meta['routes']} and ports: {meta['ports']}",
+                        content=src_content,
                         metadata=meta,
                         is_initial=True,
+                        collector="SourceCodeCollector",
+                        target=filename,
+                        fingerprint=compute_fingerprint(src_content),
+                        provenance_type="STATIC_ANALYSIS",
                     )
                 )
 
@@ -331,17 +378,22 @@ class EnvironmentCollector:
         if missing_from_expected:
             content_lines.append(f"Missing expected variables: {missing_from_expected}")
 
+        env_content = "\n".join(content_lines)
         return [
             EvidenceItem(
                 id="ev-env-presence",
                 type=EvidenceType.ENVIRONMENT,
                 source=source_label,
-                content="\n".join(content_lines),
+                content=env_content,
                 metadata={
                     "present_keys": list(present_keys),
                     "missing_expected": missing_from_expected,
                 },
                 is_initial=True,
+                collector="EnvironmentCollector",
+                target="container_env",
+                fingerprint=compute_fingerprint(env_content),
+                provenance_type="ENVIRONMENT_INSPECTION",
             )
         ]
 
