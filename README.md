@@ -244,8 +244,7 @@ The benchmark automatically saves full machine-readable results to:
 
 ## Technical Documentation
 
-- [Architecture Specification](docs/architecture_spec.md)
-- [Implementation Milestones & Risk Register](docs/milestones.md)
+- [Architecture Specification & Risk Register](docs/architecture_spec.md)
 - [REST API Contracts](docs/api_contracts.md)
 - [Security & Reliability Audit Report](file:///C:/Users/atoz/.gemini/antigravity-ide/brain/6b9730cd-ade5-4a95-9e42-e3191010e904/audit_report.md)
 - [Benchmark Results (JSON)](eval_results.json)

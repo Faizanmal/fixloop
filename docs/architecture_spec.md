@@ -105,3 +105,16 @@ graph TD
    - `NEBIUS_API_KEY` is loaded as a `SecretStr` via `pydantic-settings`.
    - Keys are stripped from logs, telemetry, and frontend payloads.
    - Environment collectors mask all variable values matching `KEY`, `SECRET`, `TOKEN`, `PASSWORD`.
+
+---
+
+## 5. Technical Risk Register & Mitigations
+
+| # | Technical Risk | Severity | Probability | Mitigation Strategy |
+|---|---|---|---|---|
+| **R1** | **Docker Daemon Unavailability on Host** | High | Medium | Dual-mode execution: live Docker mode when daemon is running, and accurate container simulator (`MockSandbox`) with identical filesystem, socket, and healthcheck contracts for testing/grading environments without Docker Desktop active. |
+| **R2** | **Nebius Token Factory Rate Limits or Key Absence** | High | Low | Robust retry with exponential backoff in HTTPX client. Deterministic `MockLLMProvider` so evaluation can proceed offline without live cloud credentials. |
+| **R3** | **LLM JSON Schema Deviations** | Medium | Medium | Low temperature (0.1) and strict system prompts. Resilient JSON extraction in `parser.py` that strips code fences and extracts raw JSON. Include fallback schema validation. |
+| **R4** | **Host Command Injection from Untrusted LLM Output** | Critical | Low | Zero host command execution policy. All diagnostic actions match `DiagnosticAllowlist`. Any input containing shell metacharacters (`;&|`$<>`) is rejected immediately. |
+| **R5** | **Infinite Reasoning Loops** | Medium | Low | Hard ceiling of `max_iterations = 5` per investigation. If confidence threshold is not reached within 5 iterations, state machine terminates with `INSUFFICIENT_EVIDENCE`. |
+
