@@ -250,6 +250,8 @@ The benchmark automatically saves full machine-readable results to:
 - [Security & Reliability Audit Report](file:///C:/Users/atoz/.gemini/antigravity-ide/brain/6b9730cd-ade5-4a95-9e42-e3191010e904/audit_report.md)
 - [Benchmark Results (JSON)](eval_results.json)
 - [Benchmark Results (CSV)](eval_results.csv)
+- [Official Hackathon Submission Package](docs/submission_materials.md)
+- [Demo Video Script & Storyboard (< 3 min)](docs/demo_video_script.md)
 - [Open Source License (Apache 2.0)](LICENSE)
 
 ---
