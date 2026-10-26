@@ -103,11 +103,17 @@ class Patch(BaseModel):
 
 
 class VerificationStatus(str, Enum):
-    NOT_RUN = "NOT_RUN"
-    IN_PROGRESS = "IN_PROGRESS"
-    PASSED = "PASSED"
-    FAILED = "FAILED"
-    INCONCLUSIVE = "INCONCLUSIVE"
+    VERIFIED_FIXED = "verified_fixed"
+    VERIFICATION_FAILED = "verification_failed"
+    PATCH_REJECTED = "patch_rejected"
+    VERIFICATION_INCONCLUSIVE = "verification_inconclusive"
+    NOT_ATTEMPTED = "not_attempted"
+
+    # Aliases
+    PASSED = "verified_fixed"
+    FAILED = "verification_failed"
+    NOT_RUN = "not_attempted"
+    INCONCLUSIVE = "verification_inconclusive"
 
 
 class VerificationResult(BaseModel):
@@ -245,4 +251,11 @@ class DiagnoseRequest(BaseModel):
     configuration_files: Optional[Dict[str, str]] = Field(default=None, description="Key-value mapping of filenames to file content")
     environment_variables: Optional[Dict[str, str]] = Field(default=None, description="Sanitized environment variables")
     model: Optional[str] = Field(default=None, description="Optional override for Nebius model ID")
+
+
+class VerifyPatchRequest(BaseModel):
+    """Request payload for /api/v1/verify."""
+    scenario_name: str = Field(..., description="Target scenario identifier (e.g. scenario_a_missing_env)")
+    user_approved: bool = Field(default=True, description="Human approval flag for high-risk operations")
+
 

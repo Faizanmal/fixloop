@@ -15,8 +15,12 @@ from backend.app.core.models import (
     DiagnoseRequest,
     DiagnoseResponse,
     InvestigationState,
+    VerifyPatchRequest,
+    DiagnosisStatus,
+    VerificationStatus,
 )
 from backend.app.agent.engine import DiagnosticEngine
+from backend.app.sandbox.verifier import ControlledVerificationPipeline, VerificationReport
 from backend.app.llm.client import NebiusLLMClient
 from backend.app.llm.exceptions import (
     NebiusError,
@@ -66,13 +70,30 @@ SCENARIOS = [
     },
 ]
 
-# Legacy alias resolution for backwards compatibility
+# Alias resolution for scenario names and backwards compatibility
 SCENARIO_ALIASES = {
+    "scenario_a": "scenario_a_missing_env",
+    "scenario_b": "scenario_b_healthcheck_mismatch",
+    "scenario_c": "scenario_c_port_mismatch",
+    "scenario_d": "scenario_d_insufficient_evidence",
     "scenario_1_healthcheck": "scenario_b_healthcheck_mismatch",
     "scenario_2_port_mismatch": "scenario_c_port_mismatch",
     "scenario_3_missing_env": "scenario_a_missing_env",
     "scenario_4_ambiguous_failure": "scenario_d_insufficient_evidence",
 }
+
+
+def get_scenario_dir(name: str) -> Path | None:
+    """Resolves scenario name or alias to directory path across working directories."""
+    resolved_name = SCENARIO_ALIASES.get(name, name)
+    p = Path("scenarios") / resolved_name
+    if p.exists() and p.is_dir():
+        return p.resolve()
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    p = repo_root / "scenarios" / resolved_name
+    if p.exists() and p.is_dir():
+        return p.resolve()
+    return None
 
 
 def check_docker_daemon() -> Dict[str, Any]:
@@ -156,26 +177,24 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
     Validates inputs, handles timeouts/retries, and returns structured diagnosis.
     """
     # 1. If service_name maps to a local scenario fixture directory, run DiagnosticEngine
-    resolved_service = SCENARIO_ALIASES.get(request.service_name, request.service_name) if request.service_name else None
-    if resolved_service:
-        candidate_dir = Path("scenarios") / resolved_service
-        if candidate_dir.exists() and candidate_dir.is_dir():
-            engine = DiagnosticEngine()
-            result = await engine.run_investigation(
-                project_root=candidate_dir,
-                logs_override=request.logs,
-                inspect_override=request.docker_inspect,
-            )
-            return DiagnoseResponse(
-                status=result.status,
-                summary=result.summary,
-                hypotheses=result.hypotheses,
-                evidence=result.evidence,
-                recommended_tests=result.recommended_tests,
-                missing_information=result.missing_information,
-                confidence=result.confidence,
-                next_action=result.next_action,
-            )
+    candidate_dir = get_scenario_dir(request.service_name) if request.service_name else None
+    if candidate_dir:
+        engine = DiagnosticEngine()
+        result = await engine.run_investigation(
+            project_root=candidate_dir,
+            logs_override=request.logs,
+            inspect_override=request.docker_inspect,
+        )
+        return DiagnoseResponse(
+            status=result.status,
+            summary=result.summary,
+            hypotheses=result.hypotheses,
+            evidence=result.evidence,
+            recommended_tests=result.recommended_tests,
+            missing_information=result.missing_information,
+            confidence=result.confidence,
+            next_action=result.next_action,
+        )
 
     # 2. Input validation for ad-hoc requests
     has_input = any([
@@ -239,6 +258,39 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "An unexpected error occurred during diagnosis.", "actionable_advice": "Check server logs for details."}
         ) from exc
+
+
+@router.post("/api/v1/verify", response_model=VerificationReport)
+async def verify_patch(request: VerifyPatchRequest) -> VerificationReport:
+    """Proposes a minimal patch, tests it in an isolated disposable sandbox, and reports actual verification status."""
+    scenario_dir = get_scenario_dir(request.scenario_name)
+    if not scenario_dir:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Scenario '{request.scenario_name}' not found."
+        )
+
+    # 1. Run diagnostic investigation
+    engine = DiagnosticEngine()
+    diag_result = await engine.run_investigation(project_root=scenario_dir)
+
+    # 2. Check sufficient evidence
+    if diag_result.status != DiagnosisStatus.DIAGNOSIS_AVAILABLE or not diag_result.hypotheses or diag_result.confidence < 0.90:
+        return VerificationReport(
+            status=VerificationStatus.NOT_ATTEMPTED,
+            test_output=f"Verification not attempted: diagnosis status is '{diag_result.status.value}' with confidence {diag_result.confidence:.2f} (>= 0.90 required).",
+            expected_criteria="Conclusive empirical evidence (confidence >= 0.90)",
+            reverted=True,
+        )
+
+    # 3. Execute sandboxed verification pipeline
+    report = await ControlledVerificationPipeline.verify_hypothesis_fix(
+        project_root=scenario_dir,
+        diagnosis_status=diag_result.status,
+        hypothesis=diag_result.hypotheses[0],
+        user_approved=request.user_approved,
+    )
+    return report
 
 
 # =========================================================================

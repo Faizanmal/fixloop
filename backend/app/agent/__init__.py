@@ -8,3 +8,12 @@ from backend.app.agent.engine import (
     DiagnosticEngineResult,
     DeterministicFactAnalyzer,
 )
+from backend.app.agent.patcher import (
+    PatchProposal,
+    PatchValidator,
+    PurePythonDiffPatcher,
+    ControlledPatchGenerator,
+    InsufficientEvidenceError,
+    PatchSecurityError,
+    APPROVED_PATCH_TARGETS,
+)
