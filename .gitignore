@@ -1,0 +1,64 @@
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.token
+
+# Keep .env.example
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node & Next.js
+node_modules/
+.next/
+out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Docker & Temp
+*.log
+docker-volumes/
+tmp/
+scratch/
+.temp/
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
+.DS_Store
