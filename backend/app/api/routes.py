@@ -409,6 +409,39 @@ async def list_investigations() -> List[InvestigationState]:
     return list(INVESTIGATIONS_DB.values())
 
 
+@router.post("/investigations/start", status_code=status.HTTP_201_CREATED)
+@router.post("/api/investigations/start", status_code=status.HTTP_201_CREATED)
+async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
+    """Starts an autonomous debugging investigation for a scenario or custom project repository."""
+    scenario_name = request.get("scenario_name") or request.get("service_name")
+    if not scenario_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Field 'scenario_name' or 'service_name' is required."
+        )
+    candidate_dir = get_scenario_dir(scenario_name)
+    if not candidate_dir:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Scenario '{scenario_name}' not found."
+        )
+
+    engine = DiagnosticEngine()
+    result = await engine.run_investigation(project_root=candidate_dir)
+
+    inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
+    inv_state = InvestigationState(
+        id=inv_id,
+        scenario_name=scenario_name,
+        project_path=str(candidate_dir),
+        status=InvestigationStatus.COMPLETED if result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE else InvestigationStatus.FAILED,
+        outcome=InvestigationOutcome.VERIFIED_FIX if result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE else InvestigationOutcome.INSUFFICIENT_EVIDENCE,
+        outcome_summary=result.summary,
+    )
+    INVESTIGATIONS_DB[inv_id] = inv_state
+    return inv_state
+
+
 @router.get("/investigations/{investigation_id}")
 async def get_investigation(investigation_id: str) -> InvestigationState:
     """Retrieve state of an investigation run."""
