@@ -1,0 +1,29 @@
+{
+  "Id": "scenario_a_auth_container_id_12345",
+  "Name": "/scenario_a_auth",
+  "State": {
+    "Status": "exited",
+    "Running": false,
+    "Paused": false,
+    "Restarting": false,
+    "OOMKilled": false,
+    "Dead": false,
+    "Pid": 0,
+    "ExitCode": 1,
+    "Error": "",
+    "StartedAt": "2026-10-26T14:00:00.100Z",
+    "FinishedAt": "2026-10-26T14:00:00.200Z"
+  },
+  "Config": {
+    "Env": [
+      "PORT=8080",
+      "LOG_LEVEL=debug",
+      "PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin"
+    ]
+  },
+  "NetworkSettings": {
+    "Ports": {
+      "8080/tcp": null
+    }
+  }
+}

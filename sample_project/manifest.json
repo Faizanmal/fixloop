@@ -1,0 +1,9 @@
+{
+  "scenario_id": "scenario_a_missing_env",
+  "name": "Scenario A: Explicit Missing Environment Variable",
+  "description": "Application startup logs explicitly document KeyError on DATABASE_URL. Engine confirms missing variable without disclosing secrets.",
+  "expected_outcome": "diagnosis_available",
+  "expected_root_cause_type": "MISSING_ENV",
+  "expected_missing_variable": "DATABASE_URL",
+  "requires_additional_probes": false
+}

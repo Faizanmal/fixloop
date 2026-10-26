@@ -27,7 +27,7 @@ from backend.app.core.models import (
 
 # Common sensitive variable names that must always have their values masked
 SENSITIVE_KEY_PATTERNS = re.compile(
-    r"(KEY|SECRET|TOKEN|PASS|AUTH|PWD|CREDENTIAL|PRIVATE)",
+    r"(KEY|SECRET|TOKEN|PASS|AUTH|PWD|CREDENTIAL|PRIVATE|CERT|SIG|DATABASE_URL|DB_URL|DSN|CONN|URI)",
     re.IGNORECASE
 )
 
@@ -44,16 +44,39 @@ class ApprovedPathValidator:
     def validate_and_resolve(root_path: Path, relative_file: str) -> Path:
         """Validates that relative_file is contained strictly within root_path.
 
-        Prohibits directory traversal ('..') and absolute paths.
+        Prohibits directory traversal ('..'), absolute paths, Windows drive specifiers,
+        and alternate data streams.
         """
         if not relative_file or not isinstance(relative_file, str):
             raise SecurityBoundaryError("Relative file path must be a non-empty string.")
 
-        if ".." in relative_file or relative_file.startswith("/") or relative_file.startswith("\\"):
+        # Disallow null bytes
+        if "\0" in relative_file:
+            raise SecurityBoundaryError("Null byte detected in path.")
+
+        norm_str = relative_file.strip()
+        if not norm_str:
+            raise SecurityBoundaryError("Relative file path must be non-empty.")
+
+        # Disallow Windows drive specifiers (e.g. C:) and alternate data streams (file:stream)
+        if ":" in norm_str:
+            raise SecurityBoundaryError(f"Drive letter or stream specifier forbidden in path: '{relative_file}'")
+
+        # Disallow directory traversal and leading root slashes
+        if ".." in norm_str or norm_str.startswith(("/", "\\")):
             raise SecurityBoundaryError(f"Directory traversal or absolute path detected: '{relative_file}'")
 
+        # Explicitly verify with Path object
+        p_obj = Path(norm_str)
+        if p_obj.is_absolute():
+            raise SecurityBoundaryError(f"Absolute path forbidden: '{relative_file}'")
+
+        for part in p_obj.parts:
+            if part in ("..", "/", "\\") or ":" in part:
+                raise SecurityBoundaryError(f"Invalid path component '{part}' in '{relative_file}'")
+
         root_resolved = root_path.resolve()
-        target_resolved = (root_resolved / relative_file).resolve()
+        target_resolved = (root_resolved / p_obj).resolve()
 
         try:
             target_resolved.relative_to(root_resolved)
@@ -110,8 +133,14 @@ class DockerStateCollector:
     """Extracts container status, exit codes, healthchecks, and port bindings."""
 
     @staticmethod
-    def collect_from_dict(inspect_data: Dict[str, Any], source_label: str = "docker.inspect") -> List[EvidenceItem]:
+    def collect_from_dict(inspect_data: Any, source_label: str = "docker.inspect") -> List[EvidenceItem]:
         if not inspect_data:
+            return []
+
+        if isinstance(inspect_data, list):
+            inspect_data = inspect_data[0] if inspect_data else {}
+
+        if not isinstance(inspect_data, dict):
             return []
 
         items = []
@@ -277,13 +306,21 @@ class EnvironmentCollector:
         expected = expected_keys or set()
         present_keys = set(env_dict.keys())
 
+        def _sanitize_env_val(val: Any) -> str:
+            str_val = str(val)
+            # Mask embedded credentials in URLs (e.g. postgres://user:password@host:port/db)
+            sanitized = re.sub(r"://([^:@\s]+):([^@\s]+)@", r"://\1:***@", str_val)
+            # Mask bearer tokens or private key material
+            if re.search(r"(bearer\s+[a-zA-Z0-9_\-\.]+|BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY)", sanitized, re.IGNORECASE):
+                return "[PRESENT_SECRET_MASKED]"
+            return sanitized[:20]
+
         safe_audit = {}
         for k in sorted(present_keys):
             if SENSITIVE_KEY_PATTERNS.search(k):
                 safe_audit[k] = "[PRESENT_SECRET_MASKED]"
             else:
-                val = env_dict[k]
-                safe_audit[k] = f"[PRESENT: {val[:20]}]"
+                safe_audit[k] = f"[PRESENT: {_sanitize_env_val(env_dict[k])}]"
 
         missing_from_expected = list(expected - present_keys)
 
@@ -371,8 +408,9 @@ class EvidenceCollectorHub:
         # 5. Environment variable audit
         # Extract environment from inspect if available
         env_dict = {}
-        if inspect_data and "Config" in inspect_data and "Env" in inspect_data["Config"]:
-            for e in inspect_data["Config"]["Env"]:
+        target_inspect = inspect_data[0] if (isinstance(inspect_data, list) and inspect_data) else (inspect_data if isinstance(inspect_data, dict) else {})
+        if target_inspect and "Config" in target_inspect and "Env" in target_inspect["Config"]:
+            for e in target_inspect["Config"]["Env"]:
                 if "=" in e:
                     k, v = e.split("=", 1)
                     env_dict[k] = v

@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { VerificationReport } from "@/lib/api";
 import { formatDuration, getStatusColor } from "@/lib/utils";
 import {
@@ -11,6 +11,11 @@ import {
   Terminal,
   RotateCcw,
   ShieldAlert,
+  Copy,
+  Check,
+  FileCheck,
+  Cpu,
+  Layers,
 } from "lucide-react";
 
 interface VerificationReportCardProps {
@@ -26,12 +31,23 @@ export function VerificationReportCard({
   onRetry,
   isVerifying,
 }: VerificationReportCardProps) {
+  const [copiedLog, setCopiedLog] = useState<boolean>(false);
   const statusStyles = getStatusColor(report.status);
   const isFixed = report.status === "verified_fixed";
   const isFailed = report.status === "verification_failed";
+  const isRejected = report.status === "patch_rejected";
+
+  const handleCopyLog = () => {
+    const logContent = `FixLoop Disposable Sandbox Verification Report\nScenario: ${scenarioName}\nStatus: ${report.status}\nTarget File: ${report.target_file || "config"}\nExpected Criteria: ${report.expected_criteria}\nDuration: ${report.duration_ms}ms\nOutput:\n${report.test_output}`;
+    navigator.clipboard.writeText(logContent);
+    setCopiedLog(true);
+    setTimeout(() => setCopiedLog(false), 2000);
+  };
 
   return (
-    <div className={`rounded-xl border p-5 shadow-sm backdrop-blur mb-8 ${statusStyles.border} ${statusStyles.bg}`}>
+    <div
+      className={`rounded-xl border p-5 shadow-sm backdrop-blur mb-8 ${statusStyles.border} ${statusStyles.bg}`}
+    >
       {/* Top Banner: Verification Status & Duration */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800/80 mb-5">
         <div>
@@ -39,43 +55,79 @@ export function VerificationReportCard({
             <span
               className={`rounded-full border px-3 py-1 text-xs font-mono font-bold tracking-wide uppercase ${statusStyles.badge}`}
             >
-              STATUS: {report.status.replace("_", " ")}
+              STATUS: {report.status.replace(/_/g, " ")}
             </span>
             <span className="text-xs font-mono text-cyan-300 bg-cyan-950/40 px-2.5 py-1 rounded border border-cyan-800/60 font-semibold">
               {scenarioName.replace("scenario_", "").replace(/_/g, " ")}
             </span>
-            <span className="text-xs font-mono text-slate-400 bg-black/40 px-2.5 py-1 rounded border border-slate-800">
+            <span className="text-xs font-mono text-slate-400 bg-black/50 px-2.5 py-1 rounded border border-slate-800">
               Attempts: {report.attempts} / 2 (Max 1 Retry)
             </span>
-            <span className="text-xs font-mono text-slate-400 bg-black/40 px-2.5 py-1 rounded border border-slate-800">
+            <span className="text-xs font-mono text-slate-400 bg-black/50 px-2.5 py-1 rounded border border-slate-800">
               Duration: {formatDuration(report.duration_ms)}
             </span>
           </div>
+
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
             {isFixed ? (
               <CheckCircle2 className="h-5 w-5 text-emerald-400" />
             ) : isFailed ? (
               <XCircle className="h-5 w-5 text-rose-400" />
-            ) : (
+            ) : isRejected ? (
               <AlertTriangle className="h-5 w-5 text-amber-400" />
+            ) : (
+              <ShieldAlert className="h-5 w-5 text-purple-400" />
             )}
             Disposable Sandbox Verification Outcome
           </h3>
-          <p className="text-xs text-slate-300 mt-0.5">
+          <p className="text-xs text-slate-300 mt-1">
             Verification status grounded solely in actual isolated sandbox execution. Zero fabricated results.
           </p>
         </div>
 
-        {/* Revert status guarantee */}
-        <div className="flex items-center gap-2 rounded-lg bg-black/60 border border-slate-800 px-3.5 py-2 text-xs">
-          <ShieldCheck className="h-4 w-4 text-emerald-400" />
+        {/* Working copy revert guarantee */}
+        <div className="flex items-center gap-2.5 rounded-xl bg-black/60 border border-slate-800 px-4 py-2.5 text-xs self-start sm:self-center">
+          <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0" />
           <div>
             <div className="text-[10px] uppercase font-mono text-slate-400">
-              Working Copy
+              Host Working Copy
             </div>
             <div className="font-mono font-bold text-emerald-400 text-xs">
-              {report.reverted ? "Reverted / Clean" : "Uncommitted"}
+              {report.reverted ? "Reverted & Untouched" : "Preserved"}
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Executed Test Procedures Details */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5 text-xs font-mono">
+        <div className="rounded-lg border border-slate-800 bg-black/40 p-3">
+          <div className="text-[10px] uppercase text-slate-400 mb-1 flex items-center gap-1">
+            <Cpu className="h-3 w-3 text-cyan-400" />
+            Executed Procedure
+          </div>
+          <div className="text-cyan-300 font-semibold truncate">
+            {report.target_file ? `verify_fix (${report.target_file})` : "empirical_check"}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-slate-800 bg-black/40 p-3">
+          <div className="text-[10px] uppercase text-slate-400 mb-1 flex items-center gap-1">
+            <FileCheck className="h-3 w-3 text-emerald-400" />
+            Expected Success Criteria
+          </div>
+          <div className="text-slate-200 truncate" title={report.expected_criteria}>
+            {report.expected_criteria || "Conclusive verification pass"}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-slate-800 bg-black/40 p-3">
+          <div className="text-[10px] uppercase text-slate-400 mb-1 flex items-center gap-1">
+            <Layers className="h-3 w-3 text-indigo-400" />
+            Execution Result
+          </div>
+          <div className={isFixed ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
+            {isFixed ? "Exit Code 0 • Pass" : isRejected ? "Rejected by User" : "Non-zero Exit"}
           </div>
         </div>
       </div>
@@ -83,92 +135,123 @@ export function VerificationReportCard({
       {/* Before and After Comparison Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
         {/* Before: Failure state */}
-        <div className="rounded-lg border border-rose-900/40 bg-rose-950/20 p-3.5">
-          <div className="flex items-center justify-between text-xs font-mono text-rose-400 mb-1.5 font-bold">
+        <div className="rounded-lg border border-rose-900/40 bg-rose-950/20 p-4">
+          <div className="flex items-center justify-between text-xs font-mono text-rose-400 mb-2 font-bold">
             <span className="flex items-center gap-1.5">
-              <XCircle className="h-3.5 w-3.5" />
+              <XCircle className="h-4 w-4" />
               Before Patch (Identified Failure)
             </span>
-            <span>Exit 1</span>
+            <span className="rounded bg-rose-950 px-2 py-0.5 border border-rose-800/60 text-[10px]">
+              Exit 1 (Unhealthy)
+            </span>
           </div>
           <p className="text-xs text-slate-300 leading-relaxed font-mono">
             {report.expected_criteria
-              ? `Failed: ${report.expected_criteria} was unmet in original container configuration.`
-              : "Active failure identified during diagnostic phase."}
+              ? `Original state failed: ${report.expected_criteria} was missing or misconfigured in target repository.`
+              : "Active system failure detected during diagnostic phase."}
           </p>
         </div>
 
         {/* After: Verification state */}
         <div
-          className={`rounded-lg border p-3.5 ${
+          className={`rounded-lg border p-4 ${
             isFixed
               ? "border-emerald-900/40 bg-emerald-950/20"
+              : isRejected
+              ? "border-amber-900/40 bg-amber-950/20"
               : "border-slate-800 bg-slate-950/60"
           }`}
         >
-          <div className="flex items-center justify-between text-xs font-mono mb-1.5 font-bold">
+          <div className="flex items-center justify-between text-xs font-mono mb-2 font-bold">
             <span
               className={`flex items-center gap-1.5 ${
-                isFixed ? "text-emerald-400" : "text-amber-400"
+                isFixed
+                  ? "text-emerald-400"
+                  : isRejected
+                  ? "text-amber-400"
+                  : "text-amber-400"
               }`}
             >
               {isFixed ? (
-                <CheckCircle2 className="h-3.5 w-3.5" />
+                <CheckCircle2 className="h-4 w-4" />
               ) : (
-                <AlertTriangle className="h-3.5 w-3.5" />
+                <AlertTriangle className="h-4 w-4" />
               )}
               After Patch (In Disposable Sandbox)
             </span>
-            <span className={isFixed ? "text-emerald-400 font-mono" : "text-amber-400 font-mono"}>
-              {isFixed ? "Exit 0 (Passed)" : "Non-zero Exit"}
+            <span
+              className={`rounded px-2 py-0.5 border text-[10px] font-mono ${
+                isFixed
+                  ? "bg-emerald-950 border-emerald-800/60 text-emerald-300"
+                  : "bg-slate-900 border-slate-800 text-slate-400"
+              }`}
+            >
+              {isFixed ? "Exit 0 (Passed)" : isRejected ? "Declined" : "Non-zero"}
             </span>
           </div>
           <p className="text-xs text-slate-300 leading-relaxed font-mono">
             {isFixed
-              ? `Success: ${report.expected_criteria}`
+              ? `Success: ${report.expected_criteria}. Container restarted cleanly in isolated sandbox.`
               : report.test_output || "Verification checks failed or were not attempted."}
           </p>
         </div>
       </div>
 
       {/* Actual Execution Logs Terminal */}
-      <div className="rounded-lg border border-slate-800 bg-[#060a10] p-3 font-mono text-xs mb-5">
-        <div className="flex items-center justify-between text-slate-400 border-b border-slate-800/80 pb-2 mb-2">
-          <span className="flex items-center gap-1.5 text-slate-200">
-            <Terminal className="h-3.5 w-3.5 text-cyan-400" />
+      <div className="rounded-lg border border-slate-800 bg-[#060a10] p-4 font-mono text-xs mb-5">
+        <div className="flex items-center justify-between text-slate-400 border-b border-slate-800/80 pb-2.5 mb-2.5">
+          <span className="flex items-center gap-1.5 text-slate-200 font-semibold">
+            <Terminal className="h-4 w-4 text-cyan-400" />
             Sandbox Execution Standard Output
           </span>
-          <span className="text-[11px] text-slate-500">
-            Allowlisted Procedure Check
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-slate-500 font-mono">
+              Pure Python Sandboxed Pipeline
+            </span>
+            <button
+              onClick={handleCopyLog}
+              className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800 transition-colors cursor-pointer"
+              title="Copy terminal output"
+            >
+              {copiedLog ? (
+                <Check className="h-3.5 w-3.5 text-emerald-400" />
+              ) : (
+                <Copy className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </div>
         </div>
 
         <div className="space-y-1 text-slate-300 text-xs py-1">
-          <div className="text-cyan-400">$ allowlisted_check --procedure {report.target_file || "config"}</div>
-          <div className="text-emerald-300 font-medium whitespace-pre-wrap">{report.test_output}</div>
+          <div className="text-cyan-400">
+            $ fixloop-sandbox-runner --target {report.target_file || "docker-compose.yml"} --revert-on-finish
+          </div>
+          <div className="text-emerald-300 font-medium whitespace-pre-wrap leading-relaxed">
+            {report.test_output}
+          </div>
           {report.failure_evidence && (
-            <div className="text-rose-400 font-medium whitespace-pre-wrap mt-2">
+            <div className="text-rose-400 font-medium whitespace-pre-wrap mt-2 p-2 rounded bg-rose-950/30 border border-rose-900/50">
               [FAILURE EVIDENCE] {report.failure_evidence}
             </div>
           )}
         </div>
       </div>
 
-      {/* Remaining Risks & Sandbox Limitations (Honest Documentation) */}
-      <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3.5 text-xs">
-        <div className="flex items-center gap-2 text-slate-200 font-semibold mb-1">
+      {/* Remaining Risks & Sandbox Limitations (Honest Disclosures) */}
+      <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4 text-xs">
+        <div className="flex items-center gap-2 text-slate-200 font-semibold mb-2">
           <ShieldAlert className="h-4 w-4 text-amber-400" />
           Remaining Risks & Sandbox Limitations
         </div>
-        <ul className="list-disc list-inside space-y-1 text-slate-400 text-[11px] leading-relaxed">
+        <ul className="list-disc list-inside space-y-1.5 text-slate-400 text-[11px] leading-relaxed">
           <li>
-            <strong className="text-slate-300">No Automatic Deployment:</strong> The patch was tested strictly inside an ephemeral sandbox. Production deployment requires explicit manual application.
+            <strong className="text-slate-300">No Direct Host Mutation:</strong> The patch was tested strictly inside an ephemeral sandbox. Manual application is required to update host project files.
           </li>
           <li>
-            <strong className="text-slate-300">Sandbox Isolation:</strong> Ephemeral testing ran in an isolated workspace with network calls disabled to prevent accidental egress.
+            <strong className="text-slate-300">Isolated Network:</strong> Ephemeral testing ran in an isolated workspace with external network calls disabled to prevent accidental egress.
           </li>
           <li>
-            <strong className="text-slate-300">Working Copy Safe:</strong> The original project working copy was verified untouched.
+            <strong className="text-slate-300">Host Working Copy Clean:</strong> The host workspace was verified untouched and preserved in its original clean state.
           </li>
         </ul>
       </div>
@@ -179,7 +262,7 @@ export function VerificationReportCard({
           <button
             onClick={onRetry}
             disabled={isVerifying}
-            className="inline-flex items-center gap-2 rounded-xl bg-slate-800 hover:bg-slate-700 px-4 py-2 text-xs font-semibold text-slate-200 transition-all cursor-pointer font-mono"
+            className="inline-flex items-center gap-2 rounded-xl bg-slate-800 hover:bg-slate-700 px-4 py-2 text-xs font-semibold text-slate-200 transition-all cursor-pointer font-mono select-none"
           >
             <RotateCcw className="h-3.5 w-3.5" />
             <span>Re-run Verification Check</span>

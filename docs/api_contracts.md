@@ -197,3 +197,83 @@ Human approval gate for sensitive or state-altering diagnostic operations.
   "resumed": true
 }
 ```
+
+---
+
+## 4. Direct Diagnostic & Verification Endpoints
+
+### `POST /api/v1/diagnose`
+Performs one-shot root-cause analysis on failing services without running the multi-step investigation state machine.
+
+**Request Body**:
+```json
+{
+  "service_name": "payment-api",
+  "logs": "KeyError: 'DATABASE_URL'",
+  "docker_inspect": { "State": { "ExitCode": 1 } },
+  "configuration_files": { "docker-compose.yml": "version: '3.8'..." },
+  "environment_variables": { "PORT": "8080" },
+  "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B"
+}
+```
+
+**Response `200 OK`**:
+```json
+{
+  "status": "diagnosis_available",
+  "summary": "Service failed during boot due to missing DATABASE_URL.",
+  "hypotheses": [
+    {
+      "description": "Missing required environment variable DATABASE_URL",
+      "supporting_evidence": ["ev-1"],
+      "contradicting_evidence": [],
+      "confidence": 0.98,
+      "recommended_discriminating_test": "check_env_key DATABASE_URL"
+    }
+  ],
+  "confidence": 0.98,
+  "next_action": "Configure DATABASE_URL in docker-compose.yml"
+}
+```
+
+---
+
+### `POST /api/v1/verify`
+Executes an isolated, sandboxed verification check on a proposed unified diff patch.
+
+**Request Body**:
+```json
+{
+  "scenario_name": "scenario_a_missing_env",
+  "patch_proposal": {
+    "id": "patch-1",
+    "hypothesis_id": "hyp-1",
+    "target_file": "docker-compose.yml",
+    "diff_unified": "--- a/docker-compose.yml\n+++ b/docker-compose.yml\n...",
+    "explanation": "Add DATABASE_URL",
+    "verification_procedure": "verify_env_presence"
+  },
+  "user_approved": true
+}
+```
+
+**Response `200 OK`**:
+```json
+{
+  "status": "verified_fixed",
+  "patch_id": "patch-1",
+  "target_file": "docker-compose.yml",
+  "test_output": "Verified: DATABASE_URL successfully declared in docker-compose.yml environment block.",
+  "expected_criteria": "DATABASE_URL is declared in compose environment",
+  "attempts": 1,
+  "reverted": true,
+  "duration_ms": 45
+}
+```
+
+---
+
+## 5. System Liveness & Readiness Probes
+
+- `GET /health`: Liveness probe returning `{ "status": "online", "version": "0.1.0" }`.
+- `GET /ready`: Readiness probe evaluating Nebius Token Factory credentials and system dependencies `{ "ready": true, "issues": [] }`.

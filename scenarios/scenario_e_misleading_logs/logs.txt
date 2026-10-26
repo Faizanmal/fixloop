@@ -1,0 +1,4 @@
+2026-10-26 14:10:01 INFO [worker.main] Initializing payment processing worker batch #4012
+2026-10-26 14:10:02 ERROR [db.pool] Connection pool timeout after 30000ms: ConnectionRefusedError: db.internal:5432
+2026-10-26 14:10:03 FATAL [worker.main] Failed connecting to postgres backend: database connection lost
+2026-10-26 14:10:03 CRITICAL [worker.main] Worker terminated unexpectedly with signal SIGKILL

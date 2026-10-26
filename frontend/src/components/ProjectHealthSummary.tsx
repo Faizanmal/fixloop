@@ -6,7 +6,8 @@ import {
   Server,
   ShieldCheck,
   Layers,
-  Clock,
+  Cpu,
+  CheckCircle2,
 } from "lucide-react";
 
 interface ProjectHealthSummaryProps {
@@ -20,72 +21,88 @@ export function ProjectHealthSummary({
   activeScenario,
   totalDiagnosesCount,
 }: ProjectHealthSummaryProps) {
-  const dockerInfo = readiness?.docker_daemon;
+  const dockerInfo = readiness?.docker;
   const isDockerUp = dockerInfo?.available ?? false;
+
+  const nebiusInfo = readiness?.nebius;
+  const isNebiusConfigured = nebiusInfo?.api_key_configured ?? false;
+  const isMockMode = nebiusInfo?.mock_mode ?? true;
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-      {/* 1. Docker & Runtime Environment */}
+      {/* 1. Docker Runtime & Sandbox Isolation */}
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 shadow-sm backdrop-blur">
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Runtime Sandbox
+            Runtime Isolation
           </span>
           <Server className="h-4 w-4 text-cyan-400" />
         </div>
-        <div className="flex items-baseline gap-2">
-          <span className="text-xl font-bold text-white font-mono">
-            {isDockerUp ? "Docker Daemon" : "Disposable TempDir"}
+        <div className="flex items-center gap-2">
+          <span className="text-lg font-bold text-white font-mono">
+            {isDockerUp ? "Docker Daemon" : "Disposable Sandbox"}
           </span>
+          {isDockerUp ? (
+            <span className="h-2 w-2 rounded-full bg-emerald-400" title="Docker daemon active" />
+          ) : (
+            <span className="h-2 w-2 rounded-full bg-amber-400" title="Filesystem sandbox active" />
+          )}
         </div>
-        <p className="mt-1 text-xs text-slate-400">
+        <p className="mt-1 text-xs text-slate-400 leading-relaxed">
           {isDockerUp
             ? `Docker Engine ${dockerInfo?.server_version || "Active"}`
-            : "Filesystem & route isolation (Zero socket leak)"}
+            : "Isolated ephemeral filesystem (Zero socket exposure)"}
         </p>
       </div>
 
-      {/* 2. Security Boundaries & Masking */}
+      {/* 2. Nebius Token Factory & NVIDIA Model */}
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 shadow-sm backdrop-blur">
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Security Boundaries
+            Nebius Token Factory
+          </span>
+          <Cpu className="h-4 w-4 text-indigo-400" />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-lg font-bold text-white font-mono truncate">
+            {isNebiusConfigured ? "Nemotron Live" : isMockMode ? "Mock Engine" : "Connecting"}
+          </span>
+          {isNebiusConfigured ? (
+            <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+          ) : (
+            <span className="rounded bg-indigo-950 px-1.5 py-0.5 text-[9px] font-mono text-indigo-300 border border-indigo-800">
+              Deterministic
+            </span>
+          )}
+        </div>
+        <p className="mt-1 text-xs text-slate-400 leading-relaxed truncate" title={nebiusInfo?.model || "NVIDIA Nemotron"}>
+          {nebiusInfo?.model ? nebiusInfo.model.split("/").pop() : "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B"}
+        </p>
+      </div>
+
+      {/* 3. Security Boundaries & Guardrails */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 shadow-sm backdrop-blur">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+            Security Invariants
           </span>
           <ShieldCheck className="h-4 w-4 text-emerald-400" />
         </div>
-        <div className="flex items-baseline gap-2">
-          <span className="text-xl font-bold text-emerald-400 font-mono">
-            Enforced
+        <div className="flex items-center gap-2">
+          <span className="text-lg font-bold text-emerald-400 font-mono">
+            Zero Shell Exec
           </span>
         </div>
-        <p className="mt-1 text-xs text-slate-400">
-          Path traversal blocked • Zero secret disclosure in logs
+        <p className="mt-1 text-xs text-slate-400 leading-relaxed">
+          Path traversal blocked • Strict probe allowlist • Zero token leaks
         </p>
       </div>
 
-      {/* 3. Diagnostic Limits & Budget */}
+      {/* 4. Target & Diagnostic Budget */}
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 shadow-sm backdrop-blur">
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Diagnostic Budget
-          </span>
-          <Clock className="h-4 w-4 text-indigo-400" />
-        </div>
-        <div className="flex items-baseline gap-2">
-          <span className="text-xl font-bold text-indigo-300 font-mono">
-            5 Steps / 5.0s
-          </span>
-        </div>
-        <p className="mt-1 text-xs text-slate-400">
-          Strict iteration limit • {totalDiagnosesCount} investigations run
-        </p>
-      </div>
-
-      {/* 4. Active Target Scenario */}
-      <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 shadow-sm backdrop-blur">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Target Service
+            Target & Budget
           </span>
           <Layers className="h-4 w-4 text-amber-400" />
         </div>
@@ -94,8 +111,8 @@ export function ProjectHealthSummary({
             {activeScenario ? activeScenario.name.split(":")[0] : "None Selected"}
           </span>
         </div>
-        <p className="mt-1 text-xs text-slate-400">
-          {activeScenario ? `Difficulty: ${activeScenario.difficulty}` : "Select a scenario below"}
+        <p className="mt-1 text-xs text-slate-400 leading-relaxed truncate">
+          {activeScenario ? `Difficulty: ${activeScenario.difficulty} • ${totalDiagnosesCount} run(s) logged` : `${totalDiagnosesCount} run(s) logged`}
         </p>
       </div>
     </div>

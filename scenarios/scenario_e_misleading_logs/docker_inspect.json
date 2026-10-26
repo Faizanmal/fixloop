@@ -1,0 +1,23 @@
+[
+  {
+    "Id": "container_scenario_e_worker",
+    "State": {
+      "Status": "exited",
+      "Running": false,
+      "OOMKilled": true,
+      "ExitCode": 137,
+      "Error": "fatal: out of memory"
+    },
+    "HostConfig": {
+      "Memory": 67108864,
+      "MemoryReservation": 67108864
+    },
+    "Config": {
+      "Image": "payment-worker:latest",
+      "Env": [
+        "DATABASE_URL=postgresql://app:pass@db.internal:5432/payments",
+        "WORKER_CONCURRENCY=16"
+      ]
+    }
+  }
+]

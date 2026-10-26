@@ -1,0 +1,3 @@
+2026-10-26 16:00:01 INFO [app.start] Service initializing...
+2026-10-26 16:00:02 ERROR [app.config] Invalid rate limiting configuration parameter in main.py: RATE_LIMIT_BURST must be integer
+2026-10-26 16:00:02 FATAL [app.start] Application bootstrap failed with exit code 1

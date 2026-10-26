@@ -1,0 +1,8 @@
+{
+  "scenario_id": "scenario_g_failed_patch_regression",
+  "name": "Scenario G: Regression in Patch (Verification Failure Caught & Reverted)",
+  "description": "App failed startup due to invalid rate limit configuration. An adversarial or buggy patch introduces a Python syntax error. FixLoop sandboxed verification detects exit code 1, records VERIFICATION_FAILED, and reverts changes. A baseline agent without verification falsely claims success.",
+  "expected_outcome": "verification_failed",
+  "expected_root_cause_type": "REGRESSION_DETECTED",
+  "requires_additional_probes": false
+}

@@ -1,0 +1,41 @@
+# FixLoop Local Development and Demo Docker Compose
+# Architecture: Isolated frontend & backend services without host Docker socket mounts.
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: fixloop-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - FIXLOOP_HOST=0.0.0.0
+      - FIXLOOP_PORT=8000
+      - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+      - USE_MOCK_LLM=${USE_MOCK_LLM:-true}
+      - NEBIUS_API_KEY=${NEBIUS_API_KEY:-}
+      - NEBIUS_BASE_URL=${NEBIUS_BASE_URL:-https://api.tokenfactory.nebius.com/v1/}
+      - NEBIUS_MODEL=${NEBIUS_MODEL:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: fixloop-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped

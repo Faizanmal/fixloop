@@ -1,0 +1,8 @@
+{
+  "scenario_id": "scenario_e_misleading_logs",
+  "name": "Scenario E: Misleading Database Logs (Kernel OOM Exit Code 137)",
+  "description": "Application logs show database connection pool timeouts and socket errors. In reality, container inspect reveals OOMKilled: true with exit code 137. The database is healthy; the container exceeded its 64MB memory limit during in-memory processing.",
+  "expected_outcome": "diagnosis_available",
+  "expected_root_cause_type": "RESOURCE_EXHAUSTION_OOM",
+  "requires_additional_probes": false
+}

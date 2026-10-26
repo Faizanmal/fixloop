@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  app-service:
+    build: .
+    container_name: scenario_g_app
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000

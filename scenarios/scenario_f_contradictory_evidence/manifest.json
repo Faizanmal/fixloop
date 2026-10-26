@@ -1,0 +1,8 @@
+{
+  "scenario_id": "scenario_f_contradictory_evidence",
+  "name": "Scenario F: Contradictory Redis Logs vs In-Memory Fallback",
+  "description": "Log file shows Redis connection refused on localhost:6379, suggesting cache failure. However, docker-compose explicitly sets REDIS_ENABLED=false and CACHE_DRIVER=memory. Container inspect confirms health is 'healthy'. FixLoop detects contradiction and prevents unnecessary Redis patch.",
+  "expected_outcome": "diagnosis_available",
+  "expected_root_cause_type": "CONTRADICTORY_EVIDENCE",
+  "requires_additional_probes": false
+}

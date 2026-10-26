@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  payment-worker:
+    build: .
+    container_name: scenario_e_worker
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+    environment:
+      - DATABASE_URL=postgresql://app:pass@db.internal:5432/payments
+      - WORKER_CONCURRENCY=16

@@ -100,11 +100,145 @@ python -m venv .venv
 .\.venv\Scripts\pytest.exe backend/tests/ -v
 ```
 
-### 5. Start Backend Server
+### 5. Start Backend Server (Local Development)
 ```powershell
 .\.venv\Scripts\uvicorn.exe backend.app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
-API Documentation is available at: `http://localhost:8000/docs`
+- Health probe: `http://localhost:8000/health`
+- Readiness probe: `http://localhost:8000/ready`
+- Interactive OpenAPI Swagger UI: `http://localhost:8000/docs`
+- ReDoc API Specification: `http://localhost:8000/redoc`
+
+### 6. Install & Start Frontend (Next.js)
+
+In a separate terminal:
+```powershell
+cd frontend
+npm install
+
+# For production build and run:
+npm run build
+npm start
+
+# Or for local development hot-reload:
+npm run dev
+```
+The FixLoop web application will be accessible at: `http://localhost:3000`
+
+---
+
+## Running with Docker Compose (Local & Production Demo)
+
+FixLoop includes an isolated, secure multi-container Docker Compose configuration that runs both the backend and frontend without mounting the host Docker socket.
+
+### 1. Build and Start All Services
+```powershell
+docker compose up --build -d
+```
+
+### 2. Verify Container Health
+```powershell
+docker compose ps
+curl http://localhost:8000/health
+curl http://localhost:8000/ready
+```
+
+### 3. Graceful Shutdown & Cleanup
+To cleanly shut down and stop all containers:
+```powershell
+docker compose down
+```
+To remove volumes and orphaned containers during teardown:
+```powershell
+docker compose down -v --remove-orphans
+```
+
+### 4. Stopping Native Local Processes
+When running natively in PowerShell:
+- Press `Ctrl + C` in the respective PowerShell terminal windows running Uvicorn and Next.js.
+- Or terminate from PowerShell:
+  ```powershell
+  Stop-Process -Name "uvicorn", "node" -Force -ErrorAction SilentlyContinue
+  ```
+
+---
+
+## Safe Sample Project Investigation
+
+A pre-packaged, safe sample project is available in [`sample_project/`](sample_project/README.md) demonstrating a real-world service crashloop caused by a missing environment variable.
+
+### 1. Inspect the Sample Microservice
+```powershell
+Get-ChildItem -Path sample_project/
+```
+The folder contains a self-contained microservice (`Dockerfile`, `docker-compose.yml`, `main.py`, `logs.txt`, and `manifest.json`).
+
+### 2. Investigate Safely via Web UI
+1. Navigate to `http://localhost:3000`.
+2. Select **Scenario A: Missing Environment Variable** in the scenario selector.
+3. Click **Start Investigation**.
+4. Observe the live state machine formulate hypotheses, verify ground truth facts, generate a minimal unified diff patch, and verify the fix in an isolated sandbox.
+
+---
+
+## Reproducible Evaluation Suite & Benchmark
+
+FixLoop includes an automated, reproducible evaluation suite designed to measure whether the agent investigates failures effectively rather than merely generating plausible-sounding explanations.
+
+### 1. Benchmark Scenarios (7 Scenarios)
+
+The benchmark evaluates 7 deterministic scenarios across critical failure modes:
+1. **Scenario A (Missing Environment Variable)**: Startup crash caused by missing `DATABASE_URL`. Supported root cause with verified fix.
+2. **Scenario B (Healthcheck Endpoint Mismatch)**: Misleading clean startup logs, but container unhealthy. Probes distinguish `/healthz` vs `/health`.
+3. **Scenario C (Port Forwarding Mismatch)**: Application listens on 8000, docker-compose forwards host 8000 to container 5000. Probe confirms port status.
+4. **Scenario D (Insufficient Evidence / Upstream Outage)**: Upstream cloud payment service experiences network resets. Agent halts honestly at `insufficient_evidence` without hallucinating code fixes.
+5. **Scenario E (Misleading Logs - Kernel OOM Exit 137)**: Logs report database connection pool timeout. Inspect reveals `OOMKilled: true` (exit code 137). Agent recognizes kernel memory exhaustion rather than database failure.
+6. **Scenario F (Contradictory Evidence - Redis Error vs Disabled Config)**: Logs report Redis connection error, but compose config explicitly sets `REDIS_ENABLED=false` and uses in-memory cache. Agent detects contradiction, notes container is healthy, and avoids unnecessary patches.
+7. **Scenario G (Regression in Patch - Sandboxed Verification)**: A patch introducing a syntax regression is tested. FixLoop sandboxed verification detects exit code 1, records `VERIFICATION_FAILED`, and reverts changes. Baseline falsely claims success.
+
+### 2. Running the Benchmark (Single Command)
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.app.eval.runner
+```
+
+To run the automated regression test via `pytest`:
+```powershell
+.\.venv\Scripts\pytest.exe backend/tests/test_evaluation_suite.py -v
+```
+
+### 3. Measured Empirical Results (FixLoop vs Log-Only Baseline)
+
+The benchmark compares FixLoop directly against a **Log-Only Baseline** across the exact same scenarios and success criteria.
+
+| Metric | FixLoop (Evidence-Driven) | Log-Only Baseline | Delta / Impact |
+|---|---|---|---|
+| **Root-Cause Accuracy Rate [MEASURED]** | **100.0%** (7/7) | **28.6%** (2/7) | **+71.4% improvement** |
+| **Diagnostic Tests Required [MEASURED]** | **0.29 avg** | **0.0** | Targeted empirical probes |
+| **Insufficient Evidence Accuracy [MEASURED]** | **100.0%** | **0.0%** | Zero hallucinations |
+| **Clean Patch Application Rate [MEASURED]** | **42.9%** | **28.6%** | Minimal unified diffs |
+| **Actual Verification Success Rate [MEASURED]** | **57.1%** | **14.3%** | Sandbox exit code ground truth |
+| **False Claims of Successful Fixes [MEASURED]** | **0** | **4** | **100% elimination of false claims** |
+| **Avg Investigation Duration [MEASURED]** | **89.4 ms** | **120.1 ms** | Fast deterministic fact-check |
+| **Total Tokens Consumed [MEASURED]** | **3,623 tokens** | **1,833 tokens** | Bounded token footprint |
+| **Estimated Inference Cost [ESTIMATE]** | **$0.001267** | **$0.000641** | ~$0.00018 per investigation |
+| **Failures & Verification Retries [MEASURED]** | **1** | **0** | Caught regression & reverted |
+
+*Note: Cost is an [ESTIMATE] computed using published Nebius Token Factory pricing for open-weights 70B models at $0.35 per 1M tokens ($0.00000035/token).*
+
+### 4. Machine-Readable Outputs
+
+The benchmark automatically saves full machine-readable results to:
+- [`eval_results.json`](file:///e:/Hackathons/devpost/Nebius/eval_results.json): Structured JSON report with scenario summaries and metric breakdowns.
+- [`eval_results.csv`](file:///e:/Hackathons/devpost/Nebius/eval_results.csv): Tabular CSV for spreadsheet analysis and CI ingestion.
+
+### 5. Methodology & Limitations
+
+- **Deterministic Fixtures**: All 7 scenarios use standardized file fixtures (`logs.txt`, `docker_inspect.json`, `docker-compose.yml`, `main.py`, `manifest.json`) to guarantee reproducibility.
+- **Ground Truth Grounding**: Verification pass/fail is determined strictly by process exit codes (`exit_code == 0`) inside `DisposableSandbox`, not model self-attestation.
+- **Limitations**:
+  1. Benchmark fixtures simulate container runtime metadata; live network latency or non-deterministic OS kernels may vary probe execution times in production.
+  2. Single-container microservice focus; multi-container distributed tracing across Kubernetes clusters is planned for future work.
 
 ---
 
@@ -113,3 +247,16 @@ API Documentation is available at: `http://localhost:8000/docs`
 - [Architecture Specification](docs/architecture_spec.md)
 - [Implementation Milestones & Risk Register](docs/milestones.md)
 - [REST API Contracts](docs/api_contracts.md)
+- [Security & Reliability Audit Report](file:///C:/Users/atoz/.gemini/antigravity-ide/brain/6b9730cd-ade5-4a95-9e42-e3191010e904/audit_report.md)
+- [Benchmark Results (JSON)](eval_results.json)
+- [Benchmark Results (CSV)](eval_results.csv)
+- [Open Source License (Apache 2.0)](LICENSE)
+
+---
+
+## License & Open Source
+
+FixLoop is open-source software licensed under the [Apache License, Version 2.0](LICENSE).
+Copyright (c) 2026 FixLoop Hackathon Contributors.
+
+

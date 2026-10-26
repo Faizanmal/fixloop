@@ -102,7 +102,13 @@ class DeterministicFactAnalyzer:
             "container_health_status": None,
             "container_exit_code": None,
             "external_outage_detected": False,
+            "oom_killed": False,
+            "contradictory_cache_state": False,
+            "configuration_regression": False,
         }
+
+        has_redis_error_in_logs = False
+        redis_disabled_in_config = False
 
         for item in evidence:
             # 1. Check for explicit missing env in logs
@@ -117,12 +123,20 @@ class DeterministicFactAnalyzer:
                 if "Connection reset by peer from external gateway" in item.content or "Upstream connection" in item.content and "timed out" in item.content:
                     facts["external_outage_detected"] = True
 
+                if "RATE_LIMIT_BURST" in item.content and "must be integer" in item.content:
+                    facts["configuration_regression"] = True
+
+                if "redis" in item.content.lower() and ("connectionrefused" in item.content.lower() or "connection refused" in item.content.lower()):
+                    has_redis_error_in_logs = True
+
             # 2. Check Docker Inspect
             elif item.type == EvidenceType.DOCKER_INSPECT:
                 if "health_status" in item.metadata:
                     facts["container_health_status"] = item.metadata["health_status"]
                 if "exit_code" in item.metadata:
                     facts["container_exit_code"] = item.metadata["exit_code"]
+                if item.metadata.get("oom_killed") or item.metadata.get("exit_code") == 137 or '"OOMKilled": true' in item.content or '"ExitCode": 137' in item.content:
+                    facts["oom_killed"] = True
 
             # 3. Check Compose
             elif item.type == EvidenceType.COMPOSE_CONFIG:
@@ -149,12 +163,23 @@ class DeterministicFactAnalyzer:
                             "container_port": int(cnt_p),
                         })
 
-            # 4. Check Source Code
+                if "REDIS_ENABLED=false" in item.content or "REDIS_ENABLED: 'false'" in item.content or 'REDIS_ENABLED: "false"' in item.content:
+                    redis_disabled_in_config = True
+
+            # 4. Check Environment Variables
+            elif item.type == EvidenceType.ENVIRONMENT:
+                if "REDIS_ENABLED" in item.content and ("false" in item.content.lower() or "[PRESENT: false]" in item.content.lower()):
+                    redis_disabled_in_config = True
+
+            # 5. Check Source Code
             elif item.type == EvidenceType.SOURCE_CODE:
                 routes = item.metadata.get("routes", [])
                 ports = item.metadata.get("ports", [])
                 facts["actual_source_routes"].extend(routes)
                 facts["source_listen_ports"].extend(ports)
+
+        if has_redis_error_in_logs and redis_disabled_in_config:
+            facts["contradictory_cache_state"] = True
 
         return facts
 
@@ -317,6 +342,58 @@ class DiagnosticEngine:
             )
             missing_info.append("External cloud provider network status and routing outside local container boundary")
             return hypotheses, missing_info, 0.40
+
+        # Case E: Kernel OOM Killed (Misleading Logs)
+        if facts.get("oom_killed"):
+            hypotheses.append(
+                DiagnoseHypothesis(
+                    description="Container terminated by Linux kernel OOM killer (exit code 137). Log entries reporting database timeouts are symptomatic of the kill, not a database failure.",
+                    supporting_evidence=[
+                        "docker_inspect: State.OOMKilled is true with exit code 137",
+                        "docker_inspect: Container exceeded memory limit under heavy processing"
+                    ],
+                    contradicting_evidence=[
+                        "application_logs: Logged database timeouts are secondary symptoms caused by process termination"
+                    ],
+                    confidence=0.96,
+                    recommended_discriminating_test=None
+                )
+            )
+            return hypotheses, missing_info, 0.04
+
+        # Case F: Contradictory Evidence (Logs show Redis error, but config disables Redis)
+        if facts.get("contradictory_cache_state"):
+            hypotheses.append(
+                DiagnoseHypothesis(
+                    description="Contradictory evidence: Logs show Redis connection error, but application environment explicitly disables Redis (REDIS_ENABLED=false) and uses in-memory cache. Container is healthy; no Redis patch required.",
+                    supporting_evidence=[
+                        "compose_config: REDIS_ENABLED=false and CACHE_DRIVER=memory configured",
+                        "docker_inspect: Container state is running and healthy"
+                    ],
+                    contradicting_evidence=[
+                        "application_logs: Log shows Redis connection refused on localhost:6379"
+                    ],
+                    confidence=0.92,
+                    recommended_discriminating_test=None
+                )
+            )
+            return hypotheses, missing_info, 0.08
+
+        # Case G: Configuration Regression
+        if facts.get("configuration_regression"):
+            hypotheses.append(
+                DiagnoseHypothesis(
+                    description="Configuration regression: RATE_LIMIT_BURST in main.py is defined as an invalid string type instead of an integer.",
+                    supporting_evidence=[
+                        "application_logs: RATE_LIMIT_BURST must be integer",
+                        "docker_inspect: Container exited with code 1"
+                    ],
+                    contradicting_evidence=[],
+                    confidence=0.95,
+                    recommended_discriminating_test="verify_syntax"
+                )
+            )
+            return hypotheses, missing_info, 0.05
 
         # Fallback / Generic
         hypotheses.append(

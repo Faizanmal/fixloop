@@ -7,7 +7,7 @@ Never exposes API secrets in error messages or logs.
 
 import asyncio
 import logging
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 import httpx
 
 from backend.app.core.config import settings
@@ -127,7 +127,8 @@ class NebiusLLMClient:
                         choices = data.get("choices", [])
                         if not choices or "message" not in choices[0]:
                             raise ModelResponseValidationError("Nebius response missing 'choices[0].message'")
-                        return choices[0]["message"].get("content", "")
+                        content = choices[0]["message"].get("content", "")
+                        return sanitize_message(content, self.api_key)
 
                     # Classify non-200 responses
                     status = response.status_code
@@ -270,3 +271,59 @@ class NebiusLLMClient:
 
         raw_output = await self._call_chat_completion(SYSTEM_PATCH_PROMPT, prompt)
         return parse_structured_output(raw_output, LLMPatchResponse)
+
+    async def verify_credentials_and_model(self) -> Dict[str, Any]:
+        """Validates that the Nebius API key is authentic and the target model is accessible."""
+        if self.use_mock and self._custom_transport is None:
+            return {
+                "verified": True,
+                "mode": "mock",
+                "model": self.default_model,
+                "message": "Deterministic mock provider active (offline/demo mode)",
+            }
+
+        url = f"{self.base_url}/models"
+        headers = {
+            "Authorization": f"Bearer {self.api_key or ''}",
+            "User-Agent": "FixLoop-Diagnostics-Engine/0.1.0",
+        }
+        async with self._create_http_client() as client:
+            try:
+                response = await client.get(url, headers=headers)
+                if response.status_code == 200:
+                    data = response.json()
+                    model_list = [m.get("id") for m in data.get("data", [])] if isinstance(data, dict) else []
+                    model_found = (self.default_model in model_list) if model_list else True
+                    return {
+                        "verified": True,
+                        "mode": "live",
+                        "model": self.default_model,
+                        "model_confirmed": model_found,
+                        "message": f"Successfully verified connection to Nebius Token Factory. Model: {self.default_model}",
+                    }
+                elif response.status_code in (401, 403):
+                    return {
+                        "verified": False,
+                        "mode": "live",
+                        "error": "Authentication failed. NEBIUS_API_KEY rejected by Nebius Token Factory.",
+                        "status_code": response.status_code,
+                    }
+                else:
+                    return {
+                        "verified": False,
+                        "mode": "live",
+                        "error": f"Nebius Token Factory returned HTTP {response.status_code}",
+                        "status_code": response.status_code,
+                    }
+            except httpx.TimeoutException:
+                return {
+                    "verified": False,
+                    "mode": "live",
+                    "error": "Connection to Nebius Token Factory timed out.",
+                }
+            except Exception as exc:
+                return {
+                    "verified": False,
+                    "mode": "live",
+                    "error": sanitize_message(str(exc), self.api_key),
+                }

@@ -1,0 +1,21 @@
+[
+  {
+    "Id": "container_scenario_f_api",
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "Health": {
+        "Status": "healthy",
+        "FailingStreak": 0
+      },
+      "ExitCode": 0
+    },
+    "Config": {
+      "Env": [
+        "REDIS_ENABLED=false",
+        "CACHE_DRIVER=memory",
+        "PORT=8000"
+      ]
+    }
+  }
+]

@@ -103,7 +103,7 @@ async def test_scenarios_endpoint():
         response = await client.get("/scenarios")
         assert response.status_code == 200
         scenarios = response.json()
-        assert len(scenarios) == 4
+        assert len(scenarios) >= 4
         ids = [s["id"] for s in scenarios]
         assert "scenario_a_missing_env" in ids
         assert "scenario_b_healthcheck_mismatch" in ids

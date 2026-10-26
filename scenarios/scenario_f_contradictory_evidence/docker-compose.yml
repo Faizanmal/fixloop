@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  api-service:
+    build: .
+    container_name: scenario_f_api
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_ENABLED=false
+      - CACHE_DRIVER=memory
+      - PORT=8000

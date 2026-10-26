@@ -15,11 +15,18 @@ from backend.app.core.models import (
     DiagnoseRequest,
     DiagnoseResponse,
     InvestigationState,
+    InvestigationStatus,
+    InvestigationOutcome,
     VerifyPatchRequest,
     DiagnosisStatus,
     VerificationStatus,
 )
 from backend.app.agent.engine import DiagnosticEngine
+from backend.app.agent.patcher import (
+    PatchProposal,
+    ControlledPatchGenerator,
+    InsufficientEvidenceError,
+)
 from backend.app.sandbox.verifier import ControlledVerificationPipeline, VerificationReport
 from backend.app.llm.client import NebiusLLMClient
 from backend.app.llm.exceptions import (
@@ -68,6 +75,27 @@ SCENARIOS = [
         "difficulty": "Hard",
         "requires_probe": False,
     },
+    {
+        "id": "scenario_e_misleading_logs",
+        "name": "Scenario E: Misleading Database Logs (Kernel OOM Exit 137)",
+        "description": "Application logs show database connection pool timeouts. Container inspect reveals OOMKilled: true (exit code 137). Engine identifies kernel memory exhaustion rather than database outage.",
+        "difficulty": "Hard",
+        "requires_probe": False,
+    },
+    {
+        "id": "scenario_f_contradictory_evidence",
+        "name": "Scenario F: Contradictory Redis Logs vs In-Memory Fallback",
+        "description": "Logs report Redis connection error, but compose config explicitly sets REDIS_ENABLED=false and uses in-memory cache. Engine detects contradiction, notes container is healthy, and avoids unnecessary patches.",
+        "difficulty": "Medium",
+        "requires_probe": False,
+    },
+    {
+        "id": "scenario_g_failed_patch_regression",
+        "name": "Scenario G: Regression in Patch (Verification Failure Caught & Reverted)",
+        "description": "App failed startup due to invalid rate limit configuration. An adversarial patch with a syntax regression is tested in the sandbox, detected with exit code 1, and reverted.",
+        "difficulty": "Medium",
+        "requires_probe": False,
+    },
 ]
 
 # Alias resolution for scenario names and backwards compatibility
@@ -76,6 +104,9 @@ SCENARIO_ALIASES = {
     "scenario_b": "scenario_b_healthcheck_mismatch",
     "scenario_c": "scenario_c_port_mismatch",
     "scenario_d": "scenario_d_insufficient_evidence",
+    "scenario_e": "scenario_e_misleading_logs",
+    "scenario_f": "scenario_f_contradictory_evidence",
+    "scenario_g": "scenario_g_failed_patch_regression",
     "scenario_1_healthcheck": "scenario_b_healthcheck_mismatch",
     "scenario_2_port_mismatch": "scenario_c_port_mismatch",
     "scenario_3_missing_env": "scenario_a_missing_env",
@@ -118,8 +149,8 @@ def check_docker_daemon() -> Dict[str, Any]:
         return {"available": False, "reason": str(exc)}
 
 
-def get_readiness_status() -> Dict[str, Any]:
-    """Evaluates readiness of application configuration without exposing secrets."""
+async def get_readiness_status() -> Dict[str, Any]:
+    """Evaluates readiness of application configuration and verifies Nebius connectivity without exposing secrets."""
     is_key_configured = settings.is_nebius_configured
     is_mock = settings.USE_MOCK_LLM or not is_key_configured
 
@@ -129,8 +160,14 @@ def get_readiness_status() -> Dict[str, Any]:
             "NEBIUS_API_KEY is not set. Configure NEBIUS_API_KEY in your environment or .env file, or set USE_MOCK_LLM=true for offline mode."
         )
 
-    # The application is ready to process requests if either Nebius is configured or Mock mode is active
-    is_ready = is_key_configured or settings.USE_MOCK_LLM
+    # Validate Nebius credentials and model access
+    client = NebiusLLMClient()
+    verification = await client.verify_credentials_and_model()
+
+    if not verification.get("verified", False):
+        issues.append(verification.get("error", "Failed to connect to Nebius Token Factory."))
+
+    is_ready = (is_key_configured or settings.USE_MOCK_LLM) and verification.get("verified", False)
 
     return {
         "ready": is_ready,
@@ -140,6 +177,7 @@ def get_readiness_status() -> Dict[str, Any]:
             "base_url": settings.normalized_nebius_base_url,
             "model": settings.NEBIUS_MODEL,
             "mock_mode": is_mock,
+            "verification": verification,
         },
         "issues": issues,
     }
@@ -163,9 +201,8 @@ async def health():
 
 @router.get("/ready")
 async def ready():
-    """Readiness probe reporting configuration presence without revealing secrets."""
-    report = get_readiness_status()
-    # If not ready and not in mock mode, return 200 with ready=false so caller can inspect issues
+    """Readiness probe reporting configuration presence and Nebius Token Factory connectivity."""
+    report = await get_readiness_status()
     return report
 
 
@@ -184,6 +221,15 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             project_root=candidate_dir,
             logs_override=request.logs,
             inspect_override=request.docker_inspect,
+        )
+        inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
+        INVESTIGATIONS_DB[inv_id] = InvestigationState(
+            id=inv_id,
+            scenario_name=request.service_name or "custom_target",
+            project_path=str(candidate_dir),
+            status=InvestigationStatus.COMPLETED if result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE else InvestigationStatus.FAILED,
+            outcome=InvestigationOutcome.VERIFIED_FIX if result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE else InvestigationOutcome.INSUFFICIENT_EVIDENCE,
+            outcome_summary=result.summary,
         )
         return DiagnoseResponse(
             status=result.status,
@@ -290,7 +336,61 @@ async def verify_patch(request: VerifyPatchRequest) -> VerificationReport:
         hypothesis=diag_result.hypotheses[0],
         user_approved=request.user_approved,
     )
+
+    # 4. Update latest matching investigation outcome
+    for inv in reversed(list(INVESTIGATIONS_DB.values())):
+        if inv.scenario_name == request.scenario_name:
+            if report.status == VerificationStatus.VERIFIED_FIXED:
+                inv.status = InvestigationStatus.COMPLETED
+                inv.outcome = InvestigationOutcome.VERIFIED_FIX
+            elif report.status == VerificationStatus.PATCH_REJECTED:
+                inv.outcome = InvestigationOutcome.HUMAN_INTERVENTION_REQUIRED
+            elif report.status == VerificationStatus.VERIFICATION_FAILED:
+                inv.status = InvestigationStatus.FAILED
+                inv.outcome = InvestigationOutcome.FAILED_FIX
+            break
+
     return report
+
+
+@router.get("/api/v1/patch/{scenario_name}", response_model=PatchProposal)
+@router.post("/api/v1/patch", response_model=PatchProposal)
+async def propose_patch(scenario_name: str) -> PatchProposal:
+    """Generates an honest, minimal reviewable patch diff for a conclusive scenario before execution."""
+    scenario_dir = get_scenario_dir(scenario_name)
+    if not scenario_dir:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Scenario '{scenario_name}' not found."
+        )
+
+    engine = DiagnosticEngine()
+    diag_result = await engine.run_investigation(project_root=scenario_dir)
+
+    if diag_result.status != DiagnosisStatus.DIAGNOSIS_AVAILABLE or not diag_result.hypotheses or diag_result.confidence < 0.90:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot propose patch: status is '{diag_result.status.value}' and confidence is {diag_result.confidence:.2f} (< 0.90 required)."
+        )
+
+    try:
+        proposal = ControlledPatchGenerator.create_patch_for_hypothesis(
+            project_root=scenario_dir,
+            diagnosis_status=diag_result.status,
+            hypothesis=diag_result.hypotheses[0],
+        )
+        return proposal
+    except InsufficientEvidenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc)
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error generating minimal patch: {exc}"
+        ) from exc
+
 
 
 # =========================================================================

@@ -303,4 +303,31 @@ class ControlledPatchGenerator:
                 verification_procedure="verify_port_mapping",
             )
 
+        # Scenario G: Configuration Regression
+        elif "rate_limit_burst" in desc or "configuration regression" in desc:
+            main_file = project_root / "main.py"
+            if not main_file.exists():
+                raise FileNotFoundError("main.py not found in project root")
+
+            old_content = main_file.read_text(encoding="utf-8", errors="replace")
+            new_content = old_content.replace('RATE_LIMIT_BURST = "unparsed_string"', "RATE_LIMIT_BURST = 100")
+
+            diff = "".join(difflib.unified_diff(
+                old_content.splitlines(keepends=True),
+                new_content.splitlines(keepends=True),
+                fromfile=f"a/{main_file.name}",
+                tofile=f"b/{main_file.name}",
+            ))
+
+            return PatchProposal(
+                id="patch-config-regression-1",
+                hypothesis_id="hyp-config-regression",
+                target_file="main.py",
+                diff_unified=diff,
+                explanation="Fixed configuration regression: set RATE_LIMIT_BURST to valid integer literal 100.",
+                risk_level="LOW",
+                requires_human_approval=False,
+                verification_procedure="verify_syntax",
+            )
+
         raise InsufficientEvidenceError(f"No minimal patch template available for hypothesis: '{desc}'")

@@ -1,0 +1,4 @@
+2026-10-26 15:00:00 INFO [cache.init] Checking external cache provider...
+2026-10-26 15:00:01 WARN [cache.redis] Error connecting to redis://localhost:6379: ConnectionRefusedError
+2026-10-26 15:00:01 INFO [cache.fallback] Operating on in-memory LRU cache fallback. All cache operations normal.
+2026-10-26 15:00:02 INFO [api.server] HTTP server listening on http://0.0.0.0:8000
