@@ -146,7 +146,7 @@ timeline
   - **100% Root-Cause Accuracy**
   - **0 False Claims of Success**
   - **$0.00018 inference cost per investigation**
-- GitHub repo and live demo URLs on screen: `https://github.com/faizanmalikmmm/fixloop`.
+- GitHub repo and live demo URLs on screen: `https://github.com/Faizanmal/fixloop`.
 
 **Voiceover (Speaker)**:
 > *"FixLoop is powered by Nebius Token Factory's ultra-low-latency API, making NVIDIA Nemotron's 30B reasoning fast and affordable at less than two-tenths of a cent per investigation.*

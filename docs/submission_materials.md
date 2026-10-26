@@ -4,8 +4,8 @@
 > **Tagline**: *Evidence-driven autonomous debugging agent that investigates Dockerized failures, executes controlled diagnostic probes, and verifies minimal patches in sandboxes without guessing.*  
 > **Track**: **Coding and Agentic Engineering Track**  
 > **Target Deadline**: October 30, 2026, at 10:30 PM IST  
-> **Open Source License**: [Apache License 2.0](https://github.com/faizanmalikmmm/fixloop/blob/master/LICENSE)  
-> **Public GitHub Repository**: [https://github.com/faizanmalikmmm/fixloop](https://github.com/faizanmalikmmm/fixloop)  
+> **Open Source License**: [Apache License 2.0](https://github.com/Faizanmal/fixloop/blob/master/LICENSE)  
+> **Public GitHub Repository**: [https://github.com/Faizanmal/fixloop](https://github.com/Faizanmal/fixloop)  
 > **Live Working Demo**: [http://localhost:3000](http://localhost:3000) (API: `http://localhost:8000/docs`)  
 > **Public Video Walkthrough (Under 3 Min)**: [https://youtu.be/fixloop-nebius-nvidia-demo](https://youtu.be/fixloop-nebius-nvidia-demo)  
 
