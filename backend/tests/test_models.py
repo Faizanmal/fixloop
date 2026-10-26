@@ -16,6 +16,12 @@ from backend.app.core.models import (
     InvestigationState,
     InvestigationStatus,
     InvestigationOutcome,
+    DiagnosisStatus,
+    DiagnoseHypothesis,
+    DiagnoseResponse,
+    DiagnoseRequest,
+    EvidenceRecord,
+    RecommendTest,
 )
 
 
@@ -63,6 +69,64 @@ def test_hypothesis_confidence_bounds():
             category=HypothesisCategory.UNKNOWN,
             confidence_score=-0.1,
         )
+
+
+def test_diagnose_hypothesis_bounds():
+    # Valid
+    dh = DiagnoseHypothesis(
+        description="Healthcheck path mismatch",
+        supporting_evidence=["ev-1"],
+        contradicting_evidence=[],
+        confidence=0.92,
+        recommended_discriminating_test="HTTP_GET /healthz"
+    )
+    assert dh.confidence == 0.92
+
+    # Invalid > 1.0
+    with pytest.raises(ValidationError):
+        DiagnoseHypothesis(
+            description="Invalid",
+            confidence=1.1
+        )
+
+
+def test_diagnose_response_serialization():
+    resp = DiagnoseResponse(
+        status=DiagnosisStatus.DIAGNOSIS_AVAILABLE,
+        summary="Clear healthcheck failure identified",
+        hypotheses=[
+            DiagnoseHypothesis(
+                description="Probe mismatch",
+                supporting_evidence=["ev-1"],
+                contradicting_evidence=[],
+                confidence=0.95,
+                recommended_discriminating_test="HTTP_GET /healthz"
+            )
+        ],
+        evidence=[
+            EvidenceRecord(
+                id="ev-1",
+                source="docker_inspect",
+                content="unhealthy status"
+            )
+        ],
+        recommended_tests=[
+            RecommendTest(
+                id="test-1",
+                test_type="HTTP_GET",
+                target="/healthz",
+                description="Verify route",
+                expected_signal="200 OK"
+            )
+        ],
+        missing_information=[],
+        confidence=0.95,
+        next_action="Patch compose"
+    )
+    json_bytes = resp.model_dump_json()
+    reconstructed = DiagnoseResponse.model_validate_json(json_bytes)
+    assert reconstructed.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
+    assert reconstructed.hypotheses[0].confidence == 0.95
 
 
 def test_diagnostic_action_lifecycle():

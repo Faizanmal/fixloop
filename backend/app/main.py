@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.app.core.config import settings
-from backend.app.api.routes import router as api_router
+from backend.app.api.routes import router as api_router, health, ready
 
 app = FastAPI(
     title="FixLoop API",
@@ -20,6 +20,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Top-level health and readiness routes (per requirements)
+app.add_api_route("/health", health, methods=["GET"], tags=["System Health"])
+app.add_api_route("/ready", ready, methods=["GET"], tags=["System Readiness"])
+
+# Mount router for /api/v1/diagnose, /scenarios, and aliases
+app.include_router(api_router)
 app.include_router(api_router, prefix="/api")
 
 
@@ -29,6 +35,7 @@ async def root():
         "service": "FixLoop Engine",
         "version": "0.1.0",
         "docs": "/docs",
-        "api_health": "/api/health",
-        "status": "ready",
+        "health": "/health",
+        "ready": "/ready",
+        "diagnose": "/api/v1/diagnose",
     }

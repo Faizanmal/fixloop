@@ -4,6 +4,7 @@ import json
 import re
 from typing import Type, TypeVar
 from pydantic import BaseModel, ValidationError
+from backend.app.llm.exceptions import ModelResponseValidationError
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -32,9 +33,10 @@ def parse_structured_output(raw_text: str, model_cls: Type[T]) -> T:
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Failed to parse LLM output as JSON: {exc}. Raw snippet: {raw_text[:200]}") from exc
+        snippet = raw_text[:200]
+        raise ModelResponseValidationError(f"Invalid JSON emitted by model: {exc}. Snippet: {snippet}") from exc
 
     try:
         return model_cls.model_validate(data)
     except ValidationError as exc:
-        raise ValueError(f"LLM JSON failed schema validation for {model_cls.__name__}: {exc}") from exc
+        raise ModelResponseValidationError(f"Model JSON failed schema validation for {model_cls.__name__}: {exc}") from exc

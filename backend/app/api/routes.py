@@ -1,20 +1,36 @@
-"""FastAPI route handlers for FixLoop API."""
+"""FastAPI route handlers for FixLoop API.
+
+Implements /health, /ready, /api/v1/diagnose, and scenario exploration.
+Guarantees secret safety and actionable error feedback.
+"""
 
 import shutil
 import subprocess
-from typing import Dict, List
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from typing import Any, Dict, List
+from fastapi import APIRouter, HTTPException, status
+
 from backend.app.core.config import settings
 from backend.app.core.models import (
+    DiagnoseRequest,
+    DiagnoseResponse,
     InvestigationState,
-    StartInvestigationRequest,
-    HumanApprovalRequest,
-    InvestigationStatus,
+)
+from backend.app.llm.client import NebiusLLMClient
+from backend.app.llm.exceptions import (
+    NebiusError,
+    NebiusAuthenticationError,
+    NebiusModelNotFoundError,
+    NebiusQuotaError,
+    NebiusBillingError,
+    NebiusTimeoutError,
+    NebiusServiceError,
+    NebiusConnectionError,
+    ModelResponseValidationError,
 )
 
 router = APIRouter()
 
-# In-memory store for MVP investigation runs
+# In-memory store for investigation runs
 INVESTIGATIONS_DB: Dict[str, InvestigationState] = {}
 
 SCENARIOS = [
@@ -49,7 +65,7 @@ SCENARIOS = [
 ]
 
 
-def check_docker_daemon() -> Dict[str, any]:
+def check_docker_daemon() -> Dict[str, Any]:
     """Inspects Docker daemon availability safely."""
     docker_cli = shutil.which("docker")
     if not docker_cli:
@@ -71,22 +87,130 @@ def check_docker_daemon() -> Dict[str, any]:
         return {"available": False, "reason": str(exc)}
 
 
-@router.get("/health")
-async def health_check():
-    """System health check and diagnostic connectivity report."""
-    docker_status = check_docker_daemon()
+def get_readiness_status() -> Dict[str, Any]:
+    """Evaluates readiness of application configuration without exposing secrets."""
+    is_key_configured = settings.is_nebius_configured
+    is_mock = settings.USE_MOCK_LLM or not is_key_configured
+
+    issues = []
+    if not is_key_configured and not settings.USE_MOCK_LLM:
+        issues.append(
+            "NEBIUS_API_KEY is not set. Configure NEBIUS_API_KEY in your environment or .env file, or set USE_MOCK_LLM=true for offline mode."
+        )
+
+    # The application is ready to process requests if either Nebius is configured or Mock mode is active
+    is_ready = is_key_configured or settings.USE_MOCK_LLM
+
     return {
-        "status": "online",
+        "ready": is_ready,
+        "service": "fixloop",
         "nebius": {
-            "configured": settings.is_nebius_configured,
-            "base_url": settings.NEBIUS_BASE_URL,
+            "api_key_configured": is_key_configured,
+            "base_url": settings.normalized_nebius_base_url,
             "model": settings.NEBIUS_MODEL,
-            "mock_mode": settings.USE_MOCK_LLM or not settings.is_nebius_configured,
+            "mock_mode": is_mock,
         },
-        "docker": docker_status,
-        "active_investigations_count": len(INVESTIGATIONS_DB),
+        "issues": issues,
     }
 
+
+# =========================================================================
+# Core Diagnostic Endpoints
+# =========================================================================
+
+@router.get("/health")
+async def health():
+    """Liveness health check endpoint."""
+    docker_status = check_docker_daemon()
+    return {
+        "status": "healthy",
+        "service": "fixloop",
+        "version": "0.1.0",
+        "docker": docker_status,
+    }
+
+
+@router.get("/ready")
+async def ready():
+    """Readiness probe reporting configuration presence without revealing secrets."""
+    report = get_readiness_status()
+    # If not ready and not in mock mode, return 200 with ready=false so caller can inspect issues
+    return report
+
+
+@router.post("/api/v1/diagnose", response_model=DiagnoseResponse)
+async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
+    """Diagnose service failure from logs, Docker inspect, and configuration.
+
+    Calls Nebius Token Factory with NVIDIA open-source model (or mock engine).
+    Validates inputs, handles timeouts/retries, and returns structured diagnosis.
+    """
+    has_input = any([
+        request.logs and request.logs.strip(),
+        request.docker_inspect,
+        request.configuration_files,
+        request.environment_variables,
+    ])
+    if not has_input:
+        raise HTTPException(
+            status_code=422,
+            detail="At least one diagnostic input (logs, docker_inspect, configuration_files, or environment_variables) must be provided."
+        )
+
+    client = NebiusLLMClient()
+    try:
+        diagnosis = await client.diagnose(request)
+        return diagnosis
+    except NebiusAuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": exc.message, "actionable_advice": exc.actionable_advice}
+        ) from exc
+    except NebiusModelNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": exc.message, "actionable_advice": exc.actionable_advice}
+        ) from exc
+    except NebiusQuotaError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={"error": exc.message, "actionable_advice": exc.actionable_advice}
+        ) from exc
+    except NebiusBillingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={"error": exc.message, "actionable_advice": exc.actionable_advice}
+        ) from exc
+    except NebiusTimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail={"error": exc.message, "actionable_advice": exc.actionable_advice}
+        ) from exc
+    except (ModelResponseValidationError, NebiusServiceError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"error": exc.message, "actionable_advice": exc.actionable_advice}
+        ) from exc
+    except NebiusConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": exc.message, "actionable_advice": exc.actionable_advice}
+        ) from exc
+    except NebiusError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"error": exc.message, "actionable_advice": exc.actionable_advice}
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "An unexpected error occurred during diagnosis.", "actionable_advice": "Check server logs for details."}
+        ) from exc
+
+
+# =========================================================================
+# Scenarios & Investigation Endpoints
+# =========================================================================
 
 @router.get("/scenarios")
 async def list_scenarios():

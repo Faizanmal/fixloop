@@ -11,8 +11,15 @@ from backend.app.core.models import (
     DiagnosticAction,
     DiagnosticProbeType,
     LLMHypothesisResponse,
-    LLMPatchResponse
+    LLMPatchResponse,
+    DiagnoseRequest,
+    DiagnoseResponse,
+    DiagnoseHypothesis,
+    EvidenceRecord,
+    RecommendTest,
+    DiagnosisStatus,
 )
+from backend.app.data.sample_reports import MOCK_NEBIUS_HEALTHCHECK_RESPONSE
 
 
 class MockLLMProvider:
@@ -195,3 +202,85 @@ class MockLLMProvider:
             )
         else:
             raise ValueError("Cannot generate patch for ambiguous / unverified scenario")
+
+    @classmethod
+    def diagnose(cls, request: DiagnoseRequest) -> DiagnoseResponse:
+        """Produces a deterministic diagnosis response matching DiagnoseResponse schema."""
+        context_str = (
+            (request.service_name or "") + " " +
+            (request.logs or "") + " " +
+            str(request.docker_inspect or "") + " " +
+            str(request.configuration_files or "")
+        ).lower()
+
+        if "database" in context_str or "missing" in context_str or "auth-service" in context_str:
+            return DiagnoseResponse(
+                status=DiagnosisStatus.DIAGNOSIS_AVAILABLE,
+                summary="Service failed to start because the DATABASE_URL environment variable is missing from the container configuration.",
+                hypotheses=[
+                    DiagnoseHypothesis(
+                        description="Missing DATABASE_URL configuration required for database connection pool initialization",
+                        supporting_evidence=[
+                            "application_logs: Database connection pool failed to initialize",
+                            "configuration_files: docker-compose.yml lacks DATABASE_URL variable"
+                        ],
+                        contradicting_evidence=[],
+                        confidence=0.96,
+                        recommended_discriminating_test="CHECK_ENV_KEY_EXISTS DATABASE_URL"
+                    )
+                ],
+                evidence=[
+                    EvidenceRecord(
+                        id="ev-1",
+                        source="application_logs",
+                        content="Critical initialization error: configuration variable missing; Database connection pool failed"
+                    ),
+                    EvidenceRecord(
+                        id="ev-2",
+                        source="configuration_files",
+                        content="docker-compose.yml defines PORT and LOG_LEVEL but omits DATABASE_URL"
+                    )
+                ],
+                recommended_tests=[
+                    RecommendTest(
+                        id="test-env-1",
+                        test_type="CHECK_ENV",
+                        target="DATABASE_URL",
+                        description="Verify whether DATABASE_URL is defined in the container environment",
+                        expected_signal="Variable is missing / undefined"
+                    )
+                ],
+                missing_information=[],
+                confidence=0.96,
+                next_action="Define DATABASE_URL in docker-compose.yml environment block"
+            )
+
+        elif "external" in context_str or "upstream" in context_str or ("timeout" in context_str and "health" not in context_str):
+            return DiagnoseResponse(
+                status=DiagnosisStatus.INSUFFICIENT_EVIDENCE,
+                summary="Service failure is caused by an external upstream dependency timeout. Local container and code configuration are valid.",
+                hypotheses=[
+                    DiagnoseHypothesis(
+                        description="Upstream third-party gateway is unreachable or experiencing outage",
+                        supporting_evidence=["application_logs: Connection timeout to external cloud host"],
+                        contradicting_evidence=[],
+                        confidence=0.65,
+                        recommended_discriminating_test="TCP_CONNECT to upstream gateway IP"
+                    )
+                ],
+                evidence=[
+                    EvidenceRecord(
+                        id="ev-ext-1",
+                        source="application_logs",
+                        content="Connection timeout connecting to cloud gateway"
+                    )
+                ],
+                recommended_tests=[],
+                missing_information=["Status of external cloud provider service", "Upstream network route accessibility"],
+                confidence=0.50,
+                next_action="Check upstream provider status page and verify network routing"
+            )
+
+        # Default / Healthcheck Scenario
+        return DiagnoseResponse.model_validate(MOCK_NEBIUS_HEALTHCHECK_RESPONSE)
+

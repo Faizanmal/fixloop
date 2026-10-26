@@ -187,3 +187,62 @@ class LLMPatchResponse(BaseModel):
     diff_unified: str
     explanation: str
     verification_command: str
+
+
+# =========================================================================
+# V1 Diagnostic Request & Response Schemas (Required by API v1 Diagnose)
+# =========================================================================
+
+class DiagnosisStatus(str, Enum):
+    DIAGNOSIS_AVAILABLE = "diagnosis_available"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    HUMAN_INTERVENTION_REQUIRED = "human_intervention_required"
+
+
+class DiagnoseHypothesis(BaseModel):
+    """Individual root-cause hypothesis with evidence references and confidence."""
+    description: str = Field(..., description="Description of the proposed root cause hypothesis")
+    supporting_evidence: List[str] = Field(default_factory=list, description="References to supporting evidence")
+    contradicting_evidence: List[str] = Field(default_factory=list, description="References to contradicting evidence")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence level between 0.0 and 1.0")
+    recommended_discriminating_test: Optional[str] = Field(default=None, description="Recommended discriminating test")
+
+
+class EvidenceRecord(BaseModel):
+    """Record of observed system evidence."""
+    id: str = Field(..., description="Unique ID for this evidence record, e.g. ev-1")
+    source: str = Field(..., description="Source of evidence: logs, inspect, env, config, etc.")
+    content: str = Field(..., description="Content or summary of observed evidence")
+    timestamp: Optional[str] = Field(default=None, description="ISO timestamp if available")
+
+
+class RecommendTest(BaseModel):
+    """Controlled discriminating test recommended to isolate competing hypotheses."""
+    id: str = Field(..., description="Identifier for recommended test probe, e.g. test-1")
+    test_type: str = Field(..., description="Type of probe: HTTP_GET, TCP_CONNECT, CHECK_ENV, READ_FILE")
+    target: str = Field(..., description="Target endpoint, port, variable, or file")
+    description: str = Field(..., description="Explanation of what this test verifies")
+    expected_signal: str = Field(..., description="Signal indicating positive or negative outcome")
+
+
+class DiagnoseResponse(BaseModel):
+    """Complete structured diagnosis response matching FixLoop API specification."""
+    status: DiagnosisStatus
+    summary: str
+    hypotheses: List[DiagnoseHypothesis] = Field(default_factory=list)
+    evidence: List[EvidenceRecord] = Field(default_factory=list)
+    recommended_tests: List[RecommendTest] = Field(default_factory=list)
+    missing_information: List[str] = Field(default_factory=list)
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Overall confidence level between 0.0 and 1.0")
+    next_action: str
+
+
+class DiagnoseRequest(BaseModel):
+    """Incoming request payload for /api/v1/diagnose."""
+    service_name: Optional[str] = Field(default="app", description="Name of the service or container")
+    logs: Optional[str] = Field(default=None, description="Application or container console logs")
+    docker_inspect: Optional[Dict[str, Any]] = Field(default=None, description="Docker inspect JSON output")
+    configuration_files: Optional[Dict[str, str]] = Field(default=None, description="Key-value mapping of filenames to file content")
+    environment_variables: Optional[Dict[str, str]] = Field(default=None, description="Sanitized environment variables")
+    model: Optional[str] = Field(default=None, description="Optional override for Nebius model ID")
+
