@@ -1,0 +1,11 @@
+{
+  "scenario_id": "scenario_b_healthcheck_mismatch",
+  "name": "Scenario B: Normal Logs with Misconfigured Healthcheck Endpoint",
+  "description": "Logs are completely normal. Container is marked unhealthy because docker-compose healthcheck probes /health while app exposes /healthz. Requires active diagnostic HTTP probe to confirm.",
+  "expected_outcome": "diagnosis_available",
+  "expected_root_cause_type": "HEALTHCHECK_MISCONFIG",
+  "expected_configured_endpoint": "/health",
+  "expected_actual_endpoint": "/healthz",
+  "requires_additional_probes": true,
+  "required_probe_type": "HTTP_GET"
+}

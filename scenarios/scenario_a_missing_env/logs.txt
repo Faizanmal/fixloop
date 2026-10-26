@@ -1,0 +1,9 @@
+2026-10-26T14:00:00.123Z [info] Initializing auth-service runtime environment...
+2026-10-26T14:00:00.150Z [info] Reading configuration variables from container environment
+Traceback (most recent call last):
+  File "/app/main.py", line 5, in <module>
+    DATABASE_URL = os.environ["DATABASE_URL"]
+  File "/usr/local/lib/python3.11/os.py", line 679, in __getitem__
+    raise KeyError(key) from None
+KeyError: 'DATABASE_URL'
+CRITICAL: Required environment variable 'DATABASE_URL' is missing!

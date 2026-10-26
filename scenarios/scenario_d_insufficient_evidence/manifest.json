@@ -1,0 +1,8 @@
+{
+  "scenario_id": "scenario_d_insufficient_evidence",
+  "name": "Scenario D: Insufficient Evidence / External Upstream Outage",
+  "description": "App connects to external upstream IP that is experiencing network resets. Local files and compose are valid. Engine exhausts local probes, refuses to fabricate a fix, and outputs insufficient_evidence or human_intervention_required.",
+  "expected_outcome": "insufficient_evidence",
+  "expected_root_cause_type": "EXTERNAL_DEPENDENCY",
+  "requires_additional_probes": false
+}

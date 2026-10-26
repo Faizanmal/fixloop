@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  web-api:
+    build: .
+    container_name: scenario_b_web
+    ports:
+      - "8000:8000"
+    healthcheck:
+      # Bug: Probes /health instead of the actual endpoint /healthz
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 2s

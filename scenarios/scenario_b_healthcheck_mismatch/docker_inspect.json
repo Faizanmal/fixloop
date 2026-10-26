@@ -1,0 +1,50 @@
+{
+  "Id": "scenario_b_web_container_id_67890",
+  "Name": "/scenario_b_web",
+  "State": {
+    "Status": "running",
+    "Running": true,
+    "Paused": false,
+    "Restarting": false,
+    "OOMKilled": false,
+    "Dead": false,
+    "Pid": 1420,
+    "ExitCode": 0,
+    "Health": {
+      "Status": "unhealthy",
+      "FailingStreak": 5,
+      "Log": [
+        {
+          "Start": "2026-10-26T14:10:05.000Z",
+          "End": "2026-10-26T14:10:05.150Z",
+          "ExitCode": 1,
+          "Output": "curl: (22) The requested URL returned error: 404"
+        },
+        {
+          "Start": "2026-10-26T14:10:10.000Z",
+          "End": "2026-10-26T14:10:10.120Z",
+          "ExitCode": 1,
+          "Output": "curl: (22) The requested URL returned error: 404"
+        }
+      ]
+    }
+  },
+  "Config": {
+    "Healthcheck": {
+      "Test": ["CMD", "curl", "-f", "http://localhost:8000/health"],
+      "Interval": 5000000000,
+      "Timeout": 2000000000,
+      "Retries": 3
+    }
+  },
+  "NetworkSettings": {
+    "Ports": {
+      "8000/tcp": [
+        {
+          "HostIp": "0.0.0.0",
+          "HostPort": "8000"
+        }
+      ]
+    }
+  }
+}

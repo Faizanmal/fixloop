@@ -1,0 +1,4 @@
+2026-10-26T14:30:00.000Z [info] Starting gateway-client on port 9000, connecting to 198.51.100.24
+2026-10-26T14:30:02.100Z [warning] Upstream connection to 198.51.100.24 timed out after 3000ms
+2026-10-26T14:30:05.200Z [warning] Connection reset by peer from external gateway 198.51.100.24
+2026-10-26T14:30:08.300Z [error] Transient network failure communicating with external service

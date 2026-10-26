@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  gateway-client:
+    build: .
+    container_name: scenario_d_client
+    ports:
+      - "9000:9000"
+    environment:
+      - UPSTREAM_HOST=198.51.100.24
+      - TIMEOUT_MS=3000

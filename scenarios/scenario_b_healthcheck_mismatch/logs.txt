@@ -1,0 +1,7 @@
+2026-10-26T14:10:00.001Z [info] Loading application modules...
+2026-10-26T14:10:00.080Z [info] Registered route GET /healthz
+2026-10-26T14:10:00.081Z [info] Registered route GET /api/v1/ping
+2026-10-26T14:10:00.100Z [info] Started server process [12]
+2026-10-26T14:10:00.101Z [info] Waiting for application startup.
+2026-10-26T14:10:00.102Z [info] Application startup complete.
+2026-10-26T14:10:00.103Z [info] Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)

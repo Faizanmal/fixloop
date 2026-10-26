@@ -6,6 +6,7 @@ Guarantees secret safety and actionable error feedback.
 
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any, Dict, List
 from fastapi import APIRouter, HTTPException, status
 
@@ -15,6 +16,7 @@ from backend.app.core.models import (
     DiagnoseResponse,
     InvestigationState,
 )
+from backend.app.agent.engine import DiagnosticEngine
 from backend.app.llm.client import NebiusLLMClient
 from backend.app.llm.exceptions import (
     NebiusError,
@@ -35,34 +37,42 @@ INVESTIGATIONS_DB: Dict[str, InvestigationState] = {}
 
 SCENARIOS = [
     {
-        "id": "scenario_1_healthcheck",
-        "name": "Scenario 1: Misconfigured Healthcheck Endpoint",
-        "description": "Container runs normally at /healthz, but docker-compose checks /health, causing repeated unhealthy status.",
+        "id": "scenario_a_missing_env",
+        "name": "Scenario A: Explicit Missing Environment Variable",
+        "description": "Application startup logs explicitly document KeyError on DATABASE_URL. Engine confirms missing variable without disclosing secrets.",
         "difficulty": "Easy",
-        "requires_probe": True,
+        "requires_probe": False,
     },
     {
-        "id": "scenario_2_port_mismatch",
-        "name": "Scenario 2: Service Port Mapping Mismatch",
-        "description": "Application listens on port 8000 internally, but compose publishes 8000:5000, causing connection refused on host.",
-        "difficulty": "Easy",
-        "requires_probe": True,
-    },
-    {
-        "id": "scenario_3_missing_env",
-        "name": "Scenario 3: Missing Environment Variable with Ambiguous Logs",
-        "description": "App silently fails on boot without explicit missing variable name. Diagnostic probe inspects env schema to pinpoint DATABASE_URL.",
+        "id": "scenario_b_healthcheck_mismatch",
+        "name": "Scenario B: Normal Logs with Healthcheck Endpoint Mismatch",
+        "description": "Logs are completely normal. Container is unhealthy because compose probes /health while app exposes /healthz. Requires active diagnostic probe to discover.",
         "difficulty": "Medium",
         "requires_probe": True,
     },
     {
-        "id": "scenario_4_ambiguous_failure",
-        "name": "Scenario 4: Upstream Outage / Insufficient Evidence",
-        "description": "Container fails due to an external network dependency. FixLoop detects insufficient evidence and honestly refuses to invent an unverified fix.",
+        "id": "scenario_c_port_mismatch",
+        "name": "Scenario C: Port Forwarding Target Mismatch",
+        "description": "App listens on port 8000, but compose forwards host 8000 to container 5000. Engine verifies listening ports with TCP probes.",
+        "difficulty": "Easy",
+        "requires_probe": True,
+    },
+    {
+        "id": "scenario_d_insufficient_evidence",
+        "name": "Scenario D: Insufficient Evidence / External Upstream Outage",
+        "description": "Intermittent connection resets from external third-party gateway. Engine exhausts local probes, refuses to invent a fix, and outputs insufficient_evidence.",
         "difficulty": "Hard",
         "requires_probe": False,
     },
 ]
+
+# Legacy alias resolution for backwards compatibility
+SCENARIO_ALIASES = {
+    "scenario_1_healthcheck": "scenario_b_healthcheck_mismatch",
+    "scenario_2_port_mismatch": "scenario_c_port_mismatch",
+    "scenario_3_missing_env": "scenario_a_missing_env",
+    "scenario_4_ambiguous_failure": "scenario_d_insufficient_evidence",
+}
 
 
 def check_docker_daemon() -> Dict[str, Any]:
@@ -145,6 +155,29 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
     Calls Nebius Token Factory with NVIDIA open-source model (or mock engine).
     Validates inputs, handles timeouts/retries, and returns structured diagnosis.
     """
+    # 1. If service_name maps to a local scenario fixture directory, run DiagnosticEngine
+    resolved_service = SCENARIO_ALIASES.get(request.service_name, request.service_name) if request.service_name else None
+    if resolved_service:
+        candidate_dir = Path("scenarios") / resolved_service
+        if candidate_dir.exists() and candidate_dir.is_dir():
+            engine = DiagnosticEngine()
+            result = await engine.run_investigation(
+                project_root=candidate_dir,
+                logs_override=request.logs,
+                inspect_override=request.docker_inspect,
+            )
+            return DiagnoseResponse(
+                status=result.status,
+                summary=result.summary,
+                hypotheses=result.hypotheses,
+                evidence=result.evidence,
+                recommended_tests=result.recommended_tests,
+                missing_information=result.missing_information,
+                confidence=result.confidence,
+                next_action=result.next_action,
+            )
+
+    # 2. Input validation for ad-hoc requests
     has_input = any([
         request.logs and request.logs.strip(),
         request.docker_inspect,

@@ -1,0 +1,11 @@
+{
+  "scenario_id": "scenario_c_port_mismatch",
+  "name": "Scenario C: Port Forwarding Target Mismatch",
+  "description": "Application listens on port 8000 inside container, but docker-compose forwards host port 8000 to container port 5000. Probe discovers port 8000 is open and 5000 is closed.",
+  "expected_outcome": "diagnosis_available",
+  "expected_root_cause_type": "PORT_MISMATCH",
+  "app_listening_port": 8000,
+  "docker_target_port": 5000,
+  "requires_additional_probes": true,
+  "required_probe_type": "TCP_CONNECT"
+}

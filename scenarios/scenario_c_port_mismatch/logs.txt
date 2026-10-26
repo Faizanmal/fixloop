@@ -1,0 +1,3 @@
+2026-10-26T14:20:00.000Z [info] Initializing order-service server...
+2026-10-26T14:20:00.050Z [info] Binding socket to 0.0.0.0:8000
+Order service active and serving at port 8000

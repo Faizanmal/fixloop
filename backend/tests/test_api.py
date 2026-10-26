@@ -105,7 +105,7 @@ async def test_scenarios_endpoint():
         scenarios = response.json()
         assert len(scenarios) == 4
         ids = [s["id"] for s in scenarios]
-        assert "scenario_1_healthcheck" in ids
-        assert "scenario_2_port_mismatch" in ids
-        assert "scenario_3_missing_env" in ids
-        assert "scenario_4_ambiguous_failure" in ids
+        assert "scenario_a_missing_env" in ids
+        assert "scenario_b_healthcheck_mismatch" in ids
+        assert "scenario_c_port_mismatch" in ids
+        assert "scenario_d_insufficient_evidence" in ids

@@ -1,1 +1,10 @@
-"""Autonomous agent loop and state machine module."""
+"""Diagnostic engine and autonomous agent package."""
+
+from backend.app.agent.engine import (
+    DiagnosticEngine,
+    DiagnosticBudget,
+    AuditLog,
+    SelectedTestRecord,
+    DiagnosticEngineResult,
+    DeterministicFactAnalyzer,
+)

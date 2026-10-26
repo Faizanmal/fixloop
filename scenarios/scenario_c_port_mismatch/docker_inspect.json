@@ -1,0 +1,29 @@
+{
+  "Id": "scenario_c_orders_container_id_99999",
+  "Name": "/scenario_c_orders",
+  "State": {
+    "Status": "running",
+    "Running": true,
+    "Paused": false,
+    "Restarting": false,
+    "OOMKilled": false,
+    "Dead": false,
+    "Pid": 2100,
+    "ExitCode": 0
+  },
+  "Config": {
+    "ExposedPorts": {
+      "5000/tcp": {}
+    }
+  },
+  "NetworkSettings": {
+    "Ports": {
+      "5000/tcp": [
+        {
+          "HostIp": "0.0.0.0",
+          "HostPort": "8000"
+        }
+      ]
+    }
+  }
+}
