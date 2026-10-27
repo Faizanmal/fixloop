@@ -336,6 +336,39 @@ class FixLoopApiClient {
     return await res.json();
   }
 
+  async applyPatch(
+    scenarioName: string,
+    patchDiff?: string | null,
+    targetFile?: string | null
+  ): Promise<{ applied: boolean; target_file: string; message: string }> {
+    const res = await fetch(`${this.baseUrl}/api/v1/apply`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        scenario_name: scenarioName,
+        patch_diff: patchDiff,
+        target_file: targetFile,
+      }),
+    });
+
+    if (!res.ok) {
+      const errorBody = await res.text();
+      let errorMsg = `Apply patch failed with HTTP ${res.status}`;
+      try {
+        const parsed = JSON.parse(errorBody);
+        if (parsed.detail) errorMsg = parsed.detail;
+      } catch {
+        if (errorBody) errorMsg = errorBody;
+      }
+      throw new Error(errorMsg);
+    }
+
+    return await res.json();
+  }
+
   async fetchRecentInvestigations(): Promise<InvestigationHistoryItem[]> {
     try {
       const res = await fetch(`${this.baseUrl}/investigations`, {

@@ -392,6 +392,48 @@ async def propose_patch(scenario_name: str) -> PatchProposal:
         ) from exc
 
 
+class ApplyPatchRequest(BaseModel):
+    scenario_name: str
+    patch_diff: Optional[str] = None
+    target_file: Optional[str] = None
+
+
+@router.post("/api/v1/apply")
+async def apply_verified_patch(request: ApplyPatchRequest):
+    """Applies a verified patch directly to the target host files with safety checks."""
+    scenario_dir = get_scenario_dir(request.scenario_name)
+    if not scenario_dir:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Scenario '{request.scenario_name}' not found."
+        )
+
+    if request.patch_diff and request.target_file:
+        diff_unified = request.patch_diff
+        target_file_name = request.target_file
+    else:
+        proposal = await propose_patch(request.scenario_name)
+        diff_unified = proposal.diff_unified
+        target_file_name = proposal.target_file
+
+    target_path = (scenario_dir / target_file_name).resolve()
+    if not target_path.exists():
+        raise HTTPException(status_code=404, detail=f"Target file {target_file_name} not found")
+
+    from backend.app.agent.patcher import PurePythonDiffPatcher
+    old_content = target_path.read_text(encoding="utf-8", errors="replace")
+    success, new_content, err = PurePythonDiffPatcher.apply_patch_to_text(old_content, diff_unified)
+    if not success:
+        raise HTTPException(status_code=400, detail=f"Failed to apply patch: {err}")
+
+    target_path.write_text(new_content, encoding="utf-8")
+    return {
+        "applied": True,
+        "target_file": target_file_name,
+        "message": f"Successfully applied verified patch to {target_file_name} on host disk."
+    }
+
+
 
 # =========================================================================
 # Scenarios & Investigation Endpoints

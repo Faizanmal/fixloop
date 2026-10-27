@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { VerificationReport } from "@/lib/api";
+import { VerificationReport, apiClient } from "@/lib/api";
 import { formatDuration, getStatusColor } from "@/lib/utils";
 import {
   ShieldCheck,
@@ -16,6 +16,8 @@ import {
   FileCheck,
   Cpu,
   Layers,
+  FileDown,
+  HardDrive,
 } from "lucide-react";
 
 interface VerificationReportCardProps {
@@ -32,6 +34,12 @@ export function VerificationReportCard({
   isVerifying,
 }: VerificationReportCardProps) {
   const [copiedLog, setCopiedLog] = useState<boolean>(false);
+  const [copiedDiff, setCopiedDiff] = useState<boolean>(false);
+  const [isApplying, setIsApplying] = useState<boolean>(false);
+  const [applied, setApplied] = useState<boolean>(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const [exported, setExported] = useState<boolean>(false);
+
   const statusStyles = getStatusColor(report.status);
   const isFixed = report.status === "verified_fixed";
   const isFailed = report.status === "verification_failed";
@@ -42,6 +50,62 @@ export function VerificationReportCard({
     navigator.clipboard.writeText(logContent);
     setCopiedLog(true);
     setTimeout(() => setCopiedLog(false), 2000);
+  };
+
+  const handleCopyDiff = () => {
+    if (report.patch_diff) {
+      navigator.clipboard.writeText(report.patch_diff);
+      setCopiedDiff(true);
+      setTimeout(() => setCopiedDiff(false), 2000);
+    }
+  };
+
+  const handleApplyToHost = async () => {
+    setIsApplying(true);
+    setApplyError(null);
+    try {
+      await apiClient.applyPatch(scenarioName, report.patch_diff, report.target_file);
+      setApplied(true);
+    } catch (err: unknown) {
+      setApplyError(err instanceof Error ? err.message : "Failed to apply patch to host.");
+    } finally {
+      setIsApplying(false);
+    }
+  };
+
+  const handleExportReport = () => {
+    const reportMd = `# FixLoop Incident Verification Report
+**Date**: ${new Date().toISOString()}
+**Scenario / Target**: ${scenarioName}
+**Status**: ${report.status} (Exit Code 0 - Verified Fixed)
+**Target File**: ${report.target_file || "configuration"}
+**Duration**: ${report.duration_ms}ms
+**Attempts**: ${report.attempts} / 2
+
+## Expected Success Criteria
+${report.expected_criteria}
+
+## Verification Execution Output
+\`\`\`
+${report.test_output}
+\`\`\`
+
+## Verified Unified Diff Patch
+\`\`\`diff
+${report.patch_diff || "No diff content"}
+\`\`\`
+
+*Report generated automatically by FixLoop Autonomous SRE Engine powered by Nebius Token Factory & NVIDIA Nemotron-3-Nano.*
+`;
+    const blob = new Blob([reportMd], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `fixloop-report-${scenarioName}-${Date.now()}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setExported(true);
+    setTimeout(() => setExported(false), 2500);
   };
 
   return (
@@ -255,6 +319,68 @@ export function VerificationReportCard({
           </li>
         </ul>
       </div>
+
+      {/* Post-Verification Production Actions */}
+      {isFixed && (
+        <div className="mt-5 pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          <div className="text-xs text-slate-400 font-mono flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span>Sandbox verified clean (Exit 0). Ready for repository integration.</span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            {report.patch_diff && (
+              <button
+                onClick={handleCopyDiff}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 px-3 py-1.5 text-xs font-mono font-medium text-slate-200 transition-all cursor-pointer"
+              >
+                {copiedDiff ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                <span>{copiedDiff ? "Copied Patch!" : "Copy Git Patch"}</span>
+              </button>
+            )}
+
+            <button
+              onClick={handleExportReport}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 px-3 py-1.5 text-xs font-mono font-medium text-slate-200 transition-all cursor-pointer"
+            >
+              {exported ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <FileDown className="h-3.5 w-3.5" />}
+              <span>{exported ? "Exported!" : "Export Report (MD)"}</span>
+            </button>
+
+            <button
+              onClick={handleApplyToHost}
+              disabled={isApplying || applied}
+              className={`inline-flex items-center gap-2 rounded-lg px-4 py-1.5 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm ${
+                applied
+                  ? "bg-emerald-950 border border-emerald-600 text-emerald-300"
+                  : "bg-emerald-600 hover:bg-emerald-500 text-white"
+              }`}
+            >
+              {isApplying ? (
+                <>
+                  <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  <span>Applying to Host...</span>
+                </>
+              ) : applied ? (
+                <>
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>Applied to Host Disk ✅</span>
+                </>
+              ) : (
+                <>
+                  <HardDrive className="h-3.5 w-3.5" />
+                  <span>Apply Patch to Host Disk</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+      {applyError && (
+        <div className="mt-2 text-[11px] font-mono text-rose-400 bg-rose-950/40 p-2 rounded border border-rose-900/60">
+          Failed to apply to host: {applyError}
+        </div>
+      )}
 
       {/* Retry / Re-run Action */}
       {!isFixed && (
