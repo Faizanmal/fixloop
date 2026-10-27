@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     FIXLOOP_PORT: int = Field(default=8000)
     DEBUG_MODE: bool = Field(default=False)
     CORS_ORIGINS: str = Field(default="http://localhost:3000,http://127.0.0.1:3000")
+    CORS_ORIGIN_REGEX: Optional[str] = Field(
+        default=r"^https?://.*\.vercel\.app$",
+        description="Regex pattern for allowed origins (e.g., all Vercel preview & production deployments)"
+    )
 
     # HTTPX & LLM Client Configuration
     HTTPX_CONNECT_TIMEOUT: float = Field(default=10.0, description="HTTP connection timeout in seconds")

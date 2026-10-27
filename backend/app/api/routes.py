@@ -7,7 +7,8 @@ Guarantees secret safety and actionable error feedback.
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, status
 
 from backend.app.core.config import settings

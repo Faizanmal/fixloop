@@ -11,14 +11,21 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# CORS configuration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS configuration: dynamically handle Vercel origins, wildcards, and credentials safely
+cors_kwargs: dict = {
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+if "*" in settings.cors_origins_list:
+    cors_kwargs["allow_origins"] = ["*"]
+    cors_kwargs["allow_credentials"] = False
+else:
+    cors_kwargs["allow_origins"] = settings.cors_origins_list
+    cors_kwargs["allow_credentials"] = True
+    if settings.CORS_ORIGIN_REGEX:
+        cors_kwargs["allow_origin_regex"] = settings.CORS_ORIGIN_REGEX
+
+app.add_middleware(CORSMiddleware, **cors_kwargs)
 
 # Top-level health and readiness routes (per requirements)
 app.add_api_route("/health", health, methods=["GET"], tags=["System Health"])

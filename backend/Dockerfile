@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 # Copy backend code, pyproject, and benchmark scenarios
 COPY backend/ ./backend/
 COPY scenarios/ ./scenarios/
+COPY sample_project/ ./sample_project/
 COPY pyproject.toml ./pyproject.toml
 
 # Create unprivileged user for secure execution

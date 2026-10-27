@@ -1,6 +1,6 @@
-# FixLoop Local Development and Demo Docker Compose
-# Architecture: Isolated frontend & backend services without host Docker socket mounts.
-version: '3.8'
+# FixLoop Unified Docker Compose
+# Default target: Backend engine on GCP VM (Frontend runs on Vercel)
+# Default execution (`docker compose up -d`) launches backend only.
 
 services:
   backend:
@@ -8,29 +8,63 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     container_name: fixloop-backend
+    restart: unless-stopped
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
       - FIXLOOP_HOST=0.0.0.0
       - FIXLOOP_PORT=8000
-      - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
-      - USE_MOCK_LLM=${USE_MOCK_LLM:-true}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://*.vercel.app,http://localhost:3000}
+      - CORS_ORIGIN_REGEX=${CORS_ORIGIN_REGEX:-^https?://.*\.vercel\.app$}
+      - USE_MOCK_LLM=${USE_MOCK_LLM:-false}
       - NEBIUS_API_KEY=${NEBIUS_API_KEY:-}
       - NEBIUS_BASE_URL=${NEBIUS_BASE_URL:-https://api.tokenfactory.nebius.com/v1/}
       - NEBIUS_MODEL=${NEBIUS_MODEL:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B}
-    restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 3s
       retries: 3
       start_period: 5s
+    networks:
+      - fixloop-network
 
+  # Optional SSL reverse proxy for custom domains
+  # Activated only when explicitly requested: docker compose --profile ssl up -d
+  caddy:
+    image: caddy:2-alpine
+    container_name: fixloop-caddy
+    restart: unless-stopped
+    profiles:
+      - ssl
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - fixloop-network
+
+  # Local development container only
+  # Activated only when explicitly requested: docker compose --profile dev up -d
+  # By default omitted so production VM runs backend only while frontend runs on Vercel.
   frontend:
     build:
       context: .
       dockerfile: frontend/Dockerfile
     container_name: fixloop-frontend
+    restart: unless-stopped
+    profiles:
+      - dev
     ports:
       - "3000:3000"
     environment:
@@ -38,4 +72,13 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    restart: unless-stopped
+    networks:
+      - fixloop-network
+
+networks:
+  fixloop-network:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
