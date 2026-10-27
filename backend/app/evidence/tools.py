@@ -8,6 +8,7 @@ Enforces:
 """
 
 from __future__ import annotations
+import asyncio
 import os
 import socket
 import time
@@ -40,6 +41,7 @@ class BaseDiagnosticTool(ABC):
     safety: str  # "safe" or "disruptive"
     description: str
     estimated_duration_ms: int = 100
+    timeout_seconds: float = 5.0
 
     @abstractmethod
     async def execute(
@@ -60,6 +62,7 @@ class ToolProbeHTTP(BaseDiagnosticTool):
     safety = "safe"
     description = "Sends an HTTP GET request to check response code, headers, and body snippet."
     estimated_duration_ms = 150
+    timeout_seconds = 3.0
 
     async def execute(
         self,
@@ -160,6 +163,7 @@ class ToolProbeTCP(BaseDiagnosticTool):
     safety = "safe"
     description = "Tests socket TCP connectivity on a specific port."
     estimated_duration_ms = 80
+    timeout_seconds = 2.0
 
     async def execute(
         self,
@@ -242,6 +246,7 @@ class ToolCheckEnvKey(BaseDiagnosticTool):
     safety = "safe"
     description = "Verifies environment variable presence without disclosing secret values."
     estimated_duration_ms = 20
+    timeout_seconds = 1.0
 
     async def execute(
         self,
@@ -304,6 +309,7 @@ class ToolReadApprovedFile(BaseDiagnosticTool):
     safety = "safe"
     description = "Reads approved configuration or source file within project boundaries."
     estimated_duration_ms = 30
+    timeout_seconds = 1.0
 
     async def execute(
         self,
@@ -377,10 +383,29 @@ class DiagnosticToolRegistry:
         parameters: Dict[str, Any],
         project_root: Path,
         simulated_context: Optional[Dict[str, Any]] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> DiagnosticToolResult:
-        """Validates tool registration and executes."""
+        """Validates tool registration and executes with per-tool timeout protection."""
         tool = self._tools.get(tool_name)
         if not tool:
             raise ValueError(f"Unregistered diagnostic tool '{tool_name}'. Permitted tools: {list(self._tools.keys())}")
 
-        return await tool.execute(target, parameters, project_root, simulated_context)
+        effective_timeout = timeout_seconds if timeout_seconds is not None else getattr(tool, "timeout_seconds", 5.0)
+        start_time = time.perf_counter()
+        try:
+            return await asyncio.wait_for(
+                tool.execute(target, parameters, project_root, simulated_context),
+                timeout=effective_timeout,
+            )
+        except asyncio.TimeoutError:
+            duration_ms = int((time.perf_counter() - start_time) * 1000)
+            return DiagnosticToolResult(
+                tool_name=tool_name,
+                target=target,
+                parameters=parameters,
+                success=False,
+                output=f"Diagnostic tool '{tool_name}' timed out after {effective_timeout:.2f}s probing '{target}'.",
+                cost=tool.cost,
+                duration_ms=duration_ms,
+                metadata={"timed_out": True, "timeout_seconds": effective_timeout},
+            )

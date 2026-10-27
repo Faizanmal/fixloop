@@ -7,6 +7,11 @@ from backend.app.agent.engine import (
     SelectedTestRecord,
     DiagnosticEngineResult,
     DeterministicFactAnalyzer,
+    InvestigationState,
+    InvestigationEventType,
+    InvestigationEvent,
+    InvalidStateTransitionError,
+    normalize_test_signature,
 )
 from backend.app.agent.patcher import (
     PatchProposal,

@@ -38,10 +38,25 @@ async def test_benchmark_suite_execution_and_metrics(tmp_path):
     # Invariant 4: Insufficient evidence handled with 100% correctness
     assert report.fixloop_summary.insufficient_evidence_accuracy_rate == 1.0
 
-    # Invariant 5: Exporting produces valid JSON and CSV
+    # Invariant 5: Zero unnecessary tests executed by FixLoop
+    assert report.fixloop_summary.total_unnecessary_tests == 0
+    assert report.fixloop_summary.avg_unnecessary_tests_per_scenario == 0.0
+
+    # Invariant 6: Patch verification rate of FixLoop strictly exceeds baseline
+    assert report.fixloop_summary.patch_verification_rate >= 0.70
+    assert report.baseline_summary.patch_verification_rate <= 0.30
+
+    # Invariant 7: Methodology, limitations, and highest-impact recommendation are documented
+    assert "identical_fixtures" in report.methodology
+    assert len(report.limitations) >= 3
+    assert "Adaptive Multi-Probe Batching" in report.highest_impact_recommendation.get("title", "")
+
+    # Invariant 8: Exporting produces valid JSON and CSV reports (including summary CSV)
     export_reports(report, output_dir=tmp_path)
     json_file = tmp_path / "eval_results.json"
     csv_file = tmp_path / "eval_results.csv"
+    summary_csv = tmp_path / "eval_summary.csv"
 
     assert json_file.exists() and json_file.stat().st_size > 500
     assert csv_file.exists() and csv_file.stat().st_size > 300
+    assert summary_csv.exists() and summary_csv.stat().st_size > 200

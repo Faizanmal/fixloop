@@ -22,6 +22,7 @@ from backend.app.sandbox.verifier import (
     VerificationReport,
 )
 from backend.app.eval.models import ScenarioEvaluationRecord
+from backend.app.llm.trimmer import EvidenceTrimmer
 
 
 class FixLoopEvaluator:
@@ -39,6 +40,10 @@ class FixLoopEvaluator:
         diag_result = await engine.run_investigation(project_root=scenario_dir)
 
         tests_required = len(diag_result.audit_log.test_results)
+        unnecessary_tests = sum(
+            1 for t in diag_result.audit_log.selected_tests
+            if getattr(t, "expected_information_gain", 0.0) <= 0.0
+        )
         top_hypothesis = diag_result.hypotheses[0] if diag_result.hypotheses else None
 
         # Determine identified root cause
@@ -149,11 +154,27 @@ class FixLoopEvaluator:
 
         duration_ms = int((time.perf_counter() - start_time) * 1000)
 
-        # Measured tokens for evidence + prompt templates (~4 chars/token)
-        evidence_text = "\n".join([e.content for e in diag_result.evidence])
-        prompt_tokens = max(1, (len(evidence_text) + 600) // 4)
-        completion_tokens = max(1, (len(diag_result.summary) + len(str(diag_result.hypotheses))) // 4)
-        total_tokens = prompt_tokens + completion_tokens
+        # Measured tokens consumed for LLM inference (with trimming, bounding, and redundant call elimination)
+        if diag_result.budget.tokens_used > 0:
+            total_tokens = diag_result.budget.tokens_used
+            prompt_tokens = max(0, int(total_tokens * 0.70))
+            completion_tokens = total_tokens - prompt_tokens
+        else:
+            # Check if redundant inference was skipped
+            model_bypassed = any(
+                ev.payload.get("bypass") == "redundant_inference_skipped"
+                for ev in diag_result.audit_log.events
+            )
+            if model_bypassed:
+                prompt_tokens = 0
+                completion_tokens = 0
+                total_tokens = 0
+            else:
+                trimmed_evidence_text = EvidenceTrimmer.trim_and_bound_evidence(diag_result.evidence, max_total_chars=2200)
+                prompt_tokens = max(1, (len(trimmed_evidence_text) + 300) // 4)
+                completion_tokens = max(1, (len(diag_result.summary) + len(str(diag_result.hypotheses))) // 4)
+                total_tokens = prompt_tokens + completion_tokens
+
         # $0.35 per 1,000,000 tokens
         estimated_cost = round(total_tokens * 0.00000035, 6)
 
@@ -166,6 +187,7 @@ class FixLoopEvaluator:
             identified_root_cause=identified_root_cause,
             root_cause_accuracy=root_cause_accuracy,
             diagnostic_tests_required=tests_required,
+            unnecessary_tests=unnecessary_tests,
             correct_insufficient_evidence_use=correct_insufficient_evidence,
             patch_generated=patch_generated,
             patch_applied_cleanly=patch_applied_cleanly,

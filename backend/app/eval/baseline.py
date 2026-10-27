@@ -139,6 +139,7 @@ class LogOnlyBaselineRunner:
             identified_root_cause=identified_root_cause,
             root_cause_accuracy=root_cause_accuracy,
             diagnostic_tests_required=0,  # Baseline never runs diagnostic tests
+            unnecessary_tests=0,
             correct_insufficient_evidence_use=correct_insufficient_evidence,
             patch_generated=patch_generated,
             patch_applied_cleanly=patch_applied_cleanly,

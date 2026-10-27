@@ -1,0 +1,14 @@
+Metric,FixLoop (Evidence-Driven),Log-Only Baseline,Delta / Notes
+Total Scenarios Evaluated,7,7,Identical deterministic fixtures
+Root-Cause Accuracy Rate,100.0%,28.6%,+71.4% improvement
+Total Diagnostic Steps,2,0,FixLoop executes discriminating probes
+Avg Diagnostic Steps / Scenario,0.29,0.0,Targeted minimal probing
+Total Unnecessary Tests,0,0,Zero redundant/zero-EIG tests
+Patch Verification Rate,80.0%,20.0%,Verified fixed / generated patches
+Actual Verification Success Rate,57.1%,14.3%,Empirical exit code 0 in sandbox
+False Claims of Successful Fixes,0,4,FixLoop: 0 false claims; Baseline: 4 false claims
+Insufficient Evidence Accuracy,100.0%,0.0%,Honest refusal without hallucinating fixes
+Avg Latency Duration (ms),24.3 ms,120.0 ms,End-to-end investigation latency
+Total Tokens Consumed,2012,1833,Measured prompt + completion tokens
+Avg Tokens / Scenario,287.4,261.9,Token efficiency
+Estimated Cost (USD),$0.000704,$0.000641,Pricing basis: $0.35/1M tokens

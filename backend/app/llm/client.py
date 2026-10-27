@@ -30,6 +30,7 @@ from backend.app.llm.exceptions import (
     NebiusConnectionError,
     ModelResponseValidationError,
 )
+from backend.app.llm.cache import llm_cache
 from backend.app.llm.mock_provider import MockLLMProvider
 from backend.app.llm.parser import parse_structured_output
 from backend.app.llm.prompts import (
@@ -40,6 +41,7 @@ from backend.app.llm.prompts import (
     USER_PATCH_TEMPLATE,
     build_diagnose_user_prompt,
 )
+from backend.app.llm.trimmer import EvidenceTrimmer
 
 logger = logging.getLogger("fixloop.llm")
 
@@ -89,16 +91,26 @@ class NebiusLLMClient:
         system_prompt: str,
         user_prompt: str,
         model_override: Optional[str] = None,
+        max_tokens: int = 1024,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Sends an OpenAI-compatible chat completion request to Nebius Token Factory.
 
         Implements explicit timeouts, controlled retries with exponential backoff,
-        and actionable, secret-safe error mapping.
+        structured JSON outputs, bounded token budgets, and actionable, secret-safe error mapping.
         """
+        target_model = model_override or self.default_model
+
+        # Safe Deterministic Cache check: only caches deterministic model responses
+        if self._custom_transport is None:
+            cached_result = llm_cache.get(target_model, system_prompt, user_prompt)
+            if cached_result is not None:
+                logger.info("Safe deterministic cache hit for model %s", target_model)
+                return cached_result
+
         if self.use_mock and self._custom_transport is None:
             raise RuntimeError("Mock mode active; live endpoint should not be queried directly")
 
-        target_model = model_override or self.default_model
         url = f"{self.base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key or ''}",
@@ -112,7 +124,8 @@ class NebiusLLMClient:
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.1,
-            "max_tokens": 2048,
+            "max_tokens": max_tokens,
+            "response_format": response_format or {"type": "json_object"},
         }
 
         last_error: Optional[Exception] = None
@@ -128,7 +141,10 @@ class NebiusLLMClient:
                         if not choices or "message" not in choices[0]:
                             raise ModelResponseValidationError("Nebius response missing 'choices[0].message'")
                         content = choices[0]["message"].get("content", "")
-                        return sanitize_message(content, self.api_key)
+                        sanitized = sanitize_message(content, self.api_key)
+                        # Store in safe deterministic cache
+                        llm_cache.set(target_model, system_prompt, user_prompt, sanitized)
+                        return sanitized
 
                     # Classify non-200 responses
                     status = response.status_code
@@ -197,27 +213,41 @@ class NebiusLLMClient:
         raise NebiusError("Unexpected failure executing request to Nebius Token Factory.")
 
     async def diagnose(self, request: DiagnoseRequest) -> DiagnoseResponse:
-        """Performs root-cause analysis on failing services.
-
-        Returns a validated DiagnoseResponse. In mock/offline mode, dispatches to MockLLMProvider.
-        """
-        # If running in mock mode and no test mock transport is injected
-        if self.use_mock and self._custom_transport is None:
-            logger.info("Using MockLLMProvider for diagnosis (Mock/Offline mode)")
-            return MockLLMProvider.diagnose(request)
+        """Performs root-cause analysis on failing services with bounded context and trimming."""
+        # Trim noisy logs and inspect dumps to eliminate context bloat
+        trimmed_logs = EvidenceTrimmer.trim_logs(request.logs) if request.logs else None
+        trimmed_inspect = EvidenceTrimmer.trim_docker_inspect(request.docker_inspect) if request.docker_inspect else None
 
         user_prompt = build_diagnose_user_prompt(
             service_name=request.service_name or "service",
-            logs=request.logs,
-            docker_inspect=request.docker_inspect,
+            logs=trimmed_logs,
+            docker_inspect=trimmed_inspect,
             configuration_files=request.configuration_files,
             environment_variables=request.environment_variables,
         )
+
+        target_model = request.model or self.default_model
+
+        # Safe Deterministic Cache check (bypassed if test transport is explicitly injected)
+        if self._custom_transport is None:
+            cached = llm_cache.get(target_model, SOFTWARE_DEBUGGING_SYSTEM_PROMPT, user_prompt)
+            if cached:
+                logger.info("Safe cache hit for diagnose request (%s)", target_model)
+                return parse_structured_output(cached, DiagnoseResponse)
+
+        # If running in mock mode and no test mock transport is injected
+        if self.use_mock and self._custom_transport is None:
+            logger.info("Using MockLLMProvider for diagnosis (Mock/Offline mode)")
+            mock_res = MockLLMProvider.diagnose(request)
+            llm_cache.set(target_model, SOFTWARE_DEBUGGING_SYSTEM_PROMPT, user_prompt, mock_res.model_dump_json())
+            return mock_res
 
         raw_output = await self._call_chat_completion(
             system_prompt=SOFTWARE_DEBUGGING_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             model_override=request.model,
+            max_tokens=1024,
+            response_format={"type": "json_object"},
         )
 
         return parse_structured_output(raw_output, DiagnoseResponse)
@@ -230,12 +260,8 @@ class NebiusLLMClient:
         evidence: List[EvidenceItem],
         current_hypotheses: List[Hypothesis],
     ) -> LLMHypothesisResponse:
-        """Formulates or updates diagnostic hypotheses based on current evidence (for investigation loop)."""
-        if self.use_mock and self._custom_transport is None:
-            logger.info("Using MockLLMProvider for hypotheses (Mock/Offline mode)")
-            return MockLLMProvider.get_hypotheses_for_scenario(scenario_name, iteration, evidence)
-
-        evidence_str = "\n".join([f"[{e.id}] ({e.type}): {e.content[:500]}" for e in evidence])
+        """Formulates or updates diagnostic hypotheses using trimmed, bounded context."""
+        evidence_str = EvidenceTrimmer.trim_and_bound_evidence(evidence, max_total_chars=2200)
         hypotheses_str = "\n".join([f"[{h.id}] {h.title} (conf: {h.confidence_score}): {h.description}" for h in current_hypotheses]) or "None yet"
 
         prompt = USER_HYPOTHESIS_TEMPLATE.format(
@@ -246,7 +272,25 @@ class NebiusLLMClient:
             hypotheses_formatted=hypotheses_str,
         )
 
-        raw_output = await self._call_chat_completion(SYSTEM_HYPOTHESIS_PROMPT, prompt)
+        # Safe Deterministic Cache check (bypassed if test transport is explicitly injected)
+        if self._custom_transport is None:
+            cached = llm_cache.get(self.default_model, SYSTEM_HYPOTHESIS_PROMPT, prompt)
+            if cached:
+                logger.info("Safe cache hit for hypothesis generation: %s", self.default_model)
+                return parse_structured_output(cached, LLMHypothesisResponse)
+
+        if self.use_mock and self._custom_transport is None:
+            logger.info("Using MockLLMProvider for hypotheses (Mock/Offline mode)")
+            resp = MockLLMProvider.get_hypotheses_for_scenario(scenario_name, iteration, evidence)
+            llm_cache.set(self.default_model, SYSTEM_HYPOTHESIS_PROMPT, prompt, resp.model_dump_json())
+            return resp
+
+        raw_output = await self._call_chat_completion(
+            SYSTEM_HYPOTHESIS_PROMPT,
+            prompt,
+            max_tokens=768,
+            response_format={"type": "json_object"},
+        )
         return parse_structured_output(raw_output, LLMHypothesisResponse)
 
     async def generate_patch(
@@ -256,20 +300,34 @@ class NebiusLLMClient:
         evidence: List[EvidenceItem],
         files_content: str,
     ) -> LLMPatchResponse:
-        """Synthesizes a minimal unified diff for a confirmed hypothesis."""
-        if self.use_mock and self._custom_transport is None:
-            logger.info("Using MockLLMProvider for patch synthesis (Mock/Offline mode)")
-            return MockLLMProvider.get_patch_for_scenario(scenario_name)
-
-        evidence_str = "\n".join([f"[{e.id}] ({e.type}): {e.content[:400]}" for e in evidence])
+        """Synthesizes a minimal unified diff for a confirmed hypothesis using bounded context."""
+        evidence_str = EvidenceTrimmer.trim_and_bound_evidence(evidence, max_total_chars=1800)
         prompt = USER_PATCH_TEMPLATE.format(
             hypothesis_title=hypothesis.title,
             hypothesis_description=hypothesis.description,
             evidence_formatted=evidence_str,
-            files_content=files_content,
+            files_content=files_content[:3000],
         )
 
-        raw_output = await self._call_chat_completion(SYSTEM_PATCH_PROMPT, prompt)
+        # Safe Deterministic Cache check (bypassed if test transport is explicitly injected)
+        if self._custom_transport is None:
+            cached = llm_cache.get(self.default_model, SYSTEM_PATCH_PROMPT, prompt)
+            if cached:
+                logger.info("Safe cache hit for patch synthesis: %s", self.default_model)
+                return parse_structured_output(cached, LLMPatchResponse)
+
+        if self.use_mock and self._custom_transport is None:
+            logger.info("Using MockLLMProvider for patch synthesis (Mock/Offline mode)")
+            mock_patch = MockLLMProvider.get_patch_for_scenario(scenario_name)
+            llm_cache.set(self.default_model, SYSTEM_PATCH_PROMPT, prompt, mock_patch.model_dump_json())
+            return mock_patch
+
+        raw_output = await self._call_chat_completion(
+            SYSTEM_PATCH_PROMPT,
+            prompt,
+            max_tokens=1024,
+            response_format={"type": "json_object"},
+        )
         return parse_structured_output(raw_output, LLMPatchResponse)
 
     async def verify_credentials_and_model(self) -> Dict[str, Any]:
