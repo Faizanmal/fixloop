@@ -140,7 +140,13 @@ class NebiusLLMClient:
                         choices = data.get("choices", [])
                         if not choices or "message" not in choices[0]:
                             raise ModelResponseValidationError("Nebius response missing 'choices[0].message'")
-                        content = choices[0]["message"].get("content", "")
+                        msg = choices[0]["message"]
+                        content = msg.get("content") or ""
+                        if not content and "reasoning" in msg and msg["reasoning"]:
+                            from backend.app.llm.parser import extract_json_from_llm_response
+                            extracted = extract_json_from_llm_response(msg["reasoning"])
+                            if extracted.startswith("{") and extracted.endswith("}"):
+                                content = extracted
                         sanitized = sanitize_message(content, self.api_key)
                         # Store in safe deterministic cache
                         llm_cache.set(target_model, system_prompt, user_prompt, sanitized)
@@ -246,7 +252,7 @@ class NebiusLLMClient:
             system_prompt=SOFTWARE_DEBUGGING_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             model_override=request.model,
-            max_tokens=1024,
+            max_tokens=3500,
             response_format={"type": "json_object"},
         )
 
@@ -288,10 +294,42 @@ class NebiusLLMClient:
         raw_output = await self._call_chat_completion(
             SYSTEM_HYPOTHESIS_PROMPT,
             prompt,
-            max_tokens=768,
+            max_tokens=3500,
             response_format={"type": "json_object"},
         )
-        return parse_structured_output(raw_output, LLMHypothesisResponse)
+        try:
+            return parse_structured_output(raw_output, LLMHypothesisResponse)
+        except Exception:
+            try:
+                diag = parse_structured_output(raw_output, DiagnoseResponse)
+                mapped_hyps = [
+                    Hypothesis(
+                        id=h.id or f"hyp-{idx+1}",
+                        title=h.description[:50],
+                        category=h.category or HypothesisCategory.CONFIG_ERROR,
+                        description=h.description,
+                        confidence_score=h.confidence,
+                        supporting_evidence_ids=h.supporting_evidence,
+                        contradicting_evidence_ids=h.contradicting_evidence,
+                    )
+                    for idx, h in enumerate(diag.hypotheses)
+                ]
+                return LLMHypothesisResponse(
+                    reasoning=diag.summary,
+                    hypotheses=mapped_hyps or [
+                        Hypothesis(
+                            id="hyp-1",
+                            title="Identified Root Cause",
+                            category=HypothesisCategory.CONFIG_ERROR,
+                            description=diag.summary,
+                            confidence_score=diag.confidence,
+                        )
+                    ],
+                    needs_diagnostic_probe=diag.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE,
+                    is_evidence_sufficient=diag.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE,
+                )
+            except Exception:
+                return parse_structured_output(raw_output, LLMHypothesisResponse)
 
     async def generate_patch(
         self,
@@ -325,7 +363,7 @@ class NebiusLLMClient:
         raw_output = await self._call_chat_completion(
             SYSTEM_PATCH_PROMPT,
             prompt,
-            max_tokens=1024,
+            max_tokens=3500,
             response_format={"type": "json_object"},
         )
         return parse_structured_output(raw_output, LLMPatchResponse)

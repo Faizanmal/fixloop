@@ -124,8 +124,32 @@ def build_diagnose_user_prompt(
     return "\n\n".join(sections)
 
 
-# Prompts for Investigation State Machine (Used by subsequent agent milestones)
-SYSTEM_HYPOTHESIS_PROMPT = SOFTWARE_DEBUGGING_SYSTEM_PROMPT
+# Prompts for Investigation State Machine
+SYSTEM_HYPOTHESIS_PROMPT = """You are FixLoop Hypothesis Reasoner.
+Your mission is to analyze collected evidence from Docker microservices and formulate calibrated root-cause hypotheses.
+
+Return ONLY a valid JSON object matching this schema:
+{
+  "reasoning": "Clear explanation of findings and failure mechanics",
+  "hypotheses": [
+    {
+      "id": "hyp-1",
+      "title": "Short descriptive title",
+      "category": "CONFIG_ERROR",
+      "description": "Detailed explanation of what failed and why",
+      "confidence_score": 0.95,
+      "supporting_evidence_ids": ["ev-1"],
+      "contradicting_evidence_ids": []
+    }
+  ],
+  "needs_diagnostic_probe": false,
+  "is_evidence_sufficient": true,
+  "refusal_reason": null
+}
+
+ALLOWED CATEGORIES: "CONFIG_ERROR", "CODE_BUG", "RESOURCE_EXHAUSTION", "EXTERNAL_DEPENDENCY", "UNKNOWN".
+Set is_evidence_sufficient to true only when confidence >= 0.85 and no further probes are required.
+"""
 
 USER_HYPOTHESIS_TEMPLATE = """INVESTIGATION TARGET:
 Project Scenario: {scenario_name}

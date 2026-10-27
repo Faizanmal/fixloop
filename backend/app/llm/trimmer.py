@@ -121,13 +121,15 @@ class EvidenceTrimmer:
         return {k: v for k, v in trimmed.items() if v is not None}
 
     @staticmethod
-    def trim_evidence_item(item: EvidenceItem, max_chars: int = 400) -> str:
+    def trim_evidence_item(item: Any, max_chars: int = 400) -> str:
         """Trims individual evidence item content according to its source type."""
-        content = item.content.strip()
+        content = getattr(item, "content", "").strip()
+        item_type = getattr(item, "type", None)
+        item_type_val = getattr(item_type, "value", None) or getattr(item, "provenance_type", "EVIDENCE")
 
-        if item.type == EvidenceType.LOGS:
+        if item_type == EvidenceType.LOGS or "log" in str(item_type_val).lower():
             trimmed = EvidenceTrimmer.trim_logs(content, max_lines=25, max_chars=max_chars)
-        elif item.type == EvidenceType.DOCKER_INSPECT:
+        elif item_type == EvidenceType.DOCKER_INSPECT or "inspect" in str(item_type_val).lower():
             try:
                 parsed = json.loads(content)
                 trimmed_dict = EvidenceTrimmer.trim_docker_inspect(parsed)
@@ -137,12 +139,12 @@ class EvidenceTrimmer:
         else:
             trimmed = content[:max_chars]
 
-        return f"[{item.id}] ({item.type.value}): {trimmed}"
+        return f"[{item.id}] ({item_type_val}): {trimmed}"
 
     @classmethod
     def trim_and_bound_evidence(
         cls,
-        evidence: List[EvidenceItem],
+        evidence: List[Any],
         max_total_chars: int = 2500,
     ) -> str:
         """Assembles a bounded, prioritized evidence block fitting strict token budgets."""
@@ -160,16 +162,20 @@ class EvidenceTrimmer:
             EvidenceType.DOCKERFILE: 7,
         }
 
-        sorted_evidence = sorted(evidence, key=lambda e: priority_map.get(e.type, 10))
+        sorted_evidence = sorted(
+            evidence,
+            key=lambda e: priority_map.get(getattr(e, "type", None), 10)
+        )
 
         formatted_items = []
         accumulated_chars = 0
 
         for item in sorted_evidence:
             trimmed_text = cls.trim_evidence_item(item, max_chars=450)
+            item_type_val = getattr(getattr(item, "type", None), "value", None) or getattr(item, "provenance_type", "EVIDENCE")
             if accumulated_chars + len(trimmed_text) > max_total_chars:
                 # Add compact indicator
-                formatted_items.append(f"[{item.id}] ({item.type.value}): [...omitted to fit token budget...]")
+                formatted_items.append(f"[{item.id}] ({item_type_val}): [...omitted to fit token budget...]")
                 break
             formatted_items.append(trimmed_text)
             accumulated_chars += len(trimmed_text) + 1
