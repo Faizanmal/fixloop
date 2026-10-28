@@ -206,63 +206,118 @@ class MockLLMProvider:
     @classmethod
     def diagnose(cls, request: DiagnoseRequest) -> DiagnoseResponse:
         """Produces a deterministic diagnosis response matching DiagnoseResponse schema."""
+        import re
+        logs = request.logs or ""
+        service_name = request.service_name or "service"
         context_str = (
-            (request.service_name or "") + " " +
-            (request.logs or "") + " " +
+            service_name + " " +
+            logs + " " +
             str(request.docker_inspect or "") + " " +
             str(request.configuration_files or "")
         ).lower()
 
-        if "database" in context_str or "missing" in context_str or "auth-service" in context_str:
+        # 1. Missing Environment Variable Check (e.g. KeyError 'DATABASE_URL' or missing env)
+        env_match = re.search(r"KeyError:\s*['\"]([A-Z0-9_]+)['\"]", logs) or \
+                    re.search(r"KeyError\s+['\"]([A-Z0-9_]+)['\"]", logs) or \
+                    re.search(r"Required environment variable\s*['\"]([A-Z0-9_]+)['\"]", logs, re.IGNORECASE) or \
+                    re.search(r"missing\s+['\"]?([A-Z0-9_]+)['\"]?\s+(?:env|environment variable)", logs, re.IGNORECASE)
+
+        if env_match or (("keyerror" in logs.lower() or "missing env" in logs.lower() or "environment variable" in logs.lower()) and "database" in context_str):
+            var_name = env_match.group(1) if env_match else ("DATABASE_URL" if "database" in context_str else "CONFIG_VAR")
+            evidence_snippet = next((line.strip() for line in logs.splitlines() if var_name in line or "KeyError" in line), f"KeyError: '{var_name}'")
             return DiagnoseResponse(
                 status=DiagnosisStatus.DIAGNOSIS_AVAILABLE,
-                summary="Service failed to start because the DATABASE_URL environment variable is missing from the container configuration.",
+                summary=f"Service '{service_name}' failed to start because the {var_name} environment variable is missing from the container configuration.",
                 hypotheses=[
                     DiagnoseHypothesis(
-                        description="Missing DATABASE_URL configuration required for database connection pool initialization",
+                        description=f"Missing {var_name} configuration required for service initialization",
                         supporting_evidence=[
-                            "application_logs: Database connection pool failed to initialize",
-                            "configuration_files: docker-compose.yml lacks DATABASE_URL variable"
+                            f"application_logs: {evidence_snippet}",
+                            f"environment: {var_name} is not set in container environment"
                         ],
                         contradicting_evidence=[],
                         confidence=0.96,
-                        recommended_discriminating_test="CHECK_ENV_KEY_EXISTS DATABASE_URL"
+                        recommended_discriminating_test=f"CHECK_ENV_KEY_EXISTS {var_name}"
                     )
                 ],
                 evidence=[
                     EvidenceRecord(
                         id="ev-1",
                         source="application_logs",
-                        content="Critical initialization error: configuration variable missing; Database connection pool failed"
+                        content=evidence_snippet
                     ),
                     EvidenceRecord(
                         id="ev-2",
-                        source="configuration_files",
-                        content="docker-compose.yml defines PORT and LOG_LEVEL but omits DATABASE_URL"
+                        source="environment_variables",
+                        content=f"Container environment inspection confirms {var_name} is undefined."
                     )
                 ],
                 recommended_tests=[
                     RecommendTest(
                         id="test-env-1",
                         test_type="CHECK_ENV",
-                        target="DATABASE_URL",
-                        description="Verify whether DATABASE_URL is defined in the container environment",
+                        target=var_name,
+                        description=f"Verify whether {var_name} is defined in the container environment",
                         expected_signal="Variable is missing / undefined"
                     )
                 ],
                 missing_information=[],
                 confidence=0.96,
-                next_action="Define DATABASE_URL in docker-compose.yml environment block"
+                next_action=f"Define {var_name} in docker-compose.yml or container environment block"
             )
 
-        elif "external" in context_str or "upstream" in context_str or ("timeout" in context_str and "health" not in context_str):
+        # 2. Healthcheck Probe Mismatch Check
+        has_healthcheck_clue = any(k in context_str for k in [
+            "healthcheck", "health check", "/health", "/healthz", "unhealthy"
+        ])
+        if has_healthcheck_clue and ("404" in context_str or "mismatch" in context_str or "unhealthy" in context_str or "refused" in context_str):
+            evidence_snippet = next((line.strip() for line in logs.splitlines() if any(k in line.lower() for k in ["health", "404", "unhealthy"])), "Health check probe returned HTTP 404")
+            return DiagnoseResponse(
+                status=DiagnosisStatus.DIAGNOSIS_AVAILABLE,
+                summary=f"Container healthcheck failure for '{service_name}': probe endpoint does not match application route configuration.",
+                hypotheses=[
+                    DiagnoseHypothesis(
+                        description="Healthcheck probe requests an unmapped or incorrect route on the container",
+                        supporting_evidence=[
+                            f"application_logs: {evidence_snippet}",
+                            "docker_inspect: container marked unhealthy due to failing probe"
+                        ],
+                        contradicting_evidence=[],
+                        confidence=0.94,
+                        recommended_discriminating_test="HTTP_GET /health vs /healthz"
+                    )
+                ],
+                evidence=[
+                    EvidenceRecord(
+                        id="ev-hc-1",
+                        source="application_logs",
+                        content=evidence_snippet
+                    )
+                ],
+                recommended_tests=[
+                    RecommendTest(
+                        id="test-hc-1",
+                        test_type="HTTP_GET",
+                        target="/healthz",
+                        description="Probe alternative health endpoint to confirm route availability",
+                        expected_signal="HTTP 200 OK"
+                    )
+                ],
+                missing_information=[],
+                confidence=0.94,
+                next_action="Align healthcheck probe test endpoint in docker-compose.yml with application route"
+            )
+
+        # 3. External Outage / Upstream Timeout Check
+        if "external" in context_str or "upstream" in context_str or ("timeout" in context_str and "health" not in context_str and "port" not in context_str):
+            evidence_snippet = next((line.strip() for line in logs.splitlines() if any(k in line.lower() for k in ["timeout", "gateway", "reset", "upstream"])), "Connection timeout to external gateway")
             return DiagnoseResponse(
                 status=DiagnosisStatus.INSUFFICIENT_EVIDENCE,
-                summary="Service failure is caused by an external upstream dependency timeout. Local container and code configuration are valid.",
+                summary=f"Service failure for '{service_name}' is caused by an external upstream dependency timeout. Local container and code configuration are valid.",
                 hypotheses=[
                     DiagnoseHypothesis(
                         description="Upstream third-party gateway is unreachable or experiencing outage",
-                        supporting_evidence=["application_logs: Connection timeout to external cloud host"],
+                        supporting_evidence=[f"application_logs: {evidence_snippet}"],
                         contradicting_evidence=[],
                         confidence=0.65,
                         recommended_discriminating_test="TCP_CONNECT to upstream gateway IP"
@@ -272,7 +327,7 @@ class MockLLMProvider:
                     EvidenceRecord(
                         id="ev-ext-1",
                         source="application_logs",
-                        content="Connection timeout connecting to cloud gateway"
+                        content=evidence_snippet
                     )
                 ],
                 recommended_tests=[],
@@ -281,6 +336,33 @@ class MockLLMProvider:
                 next_action="Check upstream provider status page and verify network routing"
             )
 
-        # Default / Healthcheck Scenario
-        return DiagnoseResponse.model_validate(MOCK_NEBIUS_HEALTHCHECK_RESPONSE)
+        # 4. Preset Scenario B Explicit Request (without custom logs override)
+        if request.service_name == "scenario_b_healthcheck_mismatch" and not request.logs:
+            return DiagnoseResponse.model_validate(MOCK_NEBIUS_HEALTHCHECK_RESPONSE)
+
+        # 5. Default Fallback for Unrelated Noise or Unrecognized Logs:
+        # Never return an unrelated preset diagnosis!
+        lines = [l.strip() for l in logs.splitlines() if l.strip()]
+        first_few_lines = lines[:3]
+        log_sample = "; ".join(first_few_lines) if first_few_lines else "No error traceback found"
+        return DiagnoseResponse(
+            status=DiagnosisStatus.INSUFFICIENT_EVIDENCE,
+            summary=f"Insufficient evidence in provided logs to establish a deterministic root cause for '{service_name}'. No known crash signature, exception traceback, or fatal error detected.",
+            hypotheses=[],
+            evidence=[
+                EvidenceRecord(
+                    id="ev-adhoc-1",
+                    source="application_logs",
+                    content=f"Analyzed logs ({len(lines)} line(s)): {log_sample[:200]}"
+                )
+            ] if logs else [],
+            recommended_tests=[],
+            missing_information=[
+                "Container fatal crash traceback or panic log",
+                "Docker inspect exit code and status",
+                "Target container environment and configuration files"
+            ],
+            confidence=0.15,
+            next_action="Provide container crash traceback, inspect json, or compose configuration."
+        )
 

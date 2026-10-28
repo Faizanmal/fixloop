@@ -164,6 +164,9 @@ class InvestigationState(BaseModel):
     verification_result: Optional[VerificationResult] = None
     outcome: Optional[InvestigationOutcome] = None
     outcome_summary: Optional[str] = None
+    confidence: Optional[float] = None
+    duration_ms: Optional[int] = None
+    is_sample: bool = False
     started_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -273,6 +276,7 @@ class DiagnoseResponse(BaseModel):
     next_action: str
     uncertainty: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Estimated diagnostic uncertainty (entropy/margin)")
     contradictions: List[ContradictionReport] = Field(default_factory=list, description="Contradictions detected across evidence")
+    investigation_id: Optional[str] = Field(default=None, description="Assigned investigation identifier if recorded")
 
 
 class DiagnoseRequest(BaseModel):

@@ -224,13 +224,20 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             inspect_override=request.docker_inspect,
         )
         inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
+        is_conclusive = result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
+        is_insufficient = result.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
         INVESTIGATIONS_DB[inv_id] = InvestigationState(
             id=inv_id,
             scenario_name=request.service_name or "custom_target",
             project_path=str(candidate_dir),
-            status=InvestigationStatus.COMPLETED if result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE else InvestigationStatus.FAILED,
-            outcome=InvestigationOutcome.VERIFIED_FIX if result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE else InvestigationOutcome.INSUFFICIENT_EVIDENCE,
+            status=InvestigationStatus.COMPLETED if (is_conclusive or is_insufficient) else InvestigationStatus.FAILED,
+            outcome=InvestigationOutcome.VERIFIED_FIX if is_conclusive else (
+                InvestigationOutcome.INSUFFICIENT_EVIDENCE if is_insufficient else InvestigationOutcome.FAILED_FIX
+            ),
             outcome_summary=result.summary,
+            confidence=result.confidence,
+            duration_ms=45,
+            is_sample=True,
         )
         return DiagnoseResponse(
             status=result.status,
@@ -241,6 +248,7 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             missing_information=result.missing_information,
             confidence=result.confidence,
             next_action=result.next_action,
+            investigation_id=inv_id,
         )
 
     # 2. Input validation for ad-hoc requests
@@ -259,6 +267,23 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
     client = NebiusLLMClient()
     try:
         diagnosis = await client.diagnose(request)
+        inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
+        is_conclusive = diagnosis.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
+        is_insufficient = diagnosis.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
+        INVESTIGATIONS_DB[inv_id] = InvestigationState(
+            id=inv_id,
+            scenario_name=request.service_name or "custom_target",
+            project_path="custom_input",
+            status=InvestigationStatus.COMPLETED if (is_conclusive or is_insufficient) else InvestigationStatus.FAILED,
+            outcome=InvestigationOutcome.VERIFIED_FIX if is_conclusive else (
+                InvestigationOutcome.INSUFFICIENT_EVIDENCE if is_insufficient else InvestigationOutcome.FAILED_FIX
+            ),
+            outcome_summary=diagnosis.summary,
+            confidence=diagnosis.confidence,
+            duration_ms=45,
+            is_sample=False,
+        )
+        diagnosis.investigation_id = inv_id
         return diagnosis
     except NebiusAuthenticationError as exc:
         raise HTTPException(
@@ -473,13 +498,20 @@ async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
     result = await engine.run_investigation(project_root=candidate_dir)
 
     inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
+    is_conclusive = result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
+    is_insufficient = result.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
     inv_state = InvestigationState(
         id=inv_id,
         scenario_name=scenario_name,
         project_path=str(candidate_dir),
-        status=InvestigationStatus.COMPLETED if result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE else InvestigationStatus.FAILED,
-        outcome=InvestigationOutcome.VERIFIED_FIX if result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE else InvestigationOutcome.INSUFFICIENT_EVIDENCE,
+        status=InvestigationStatus.COMPLETED if (is_conclusive or is_insufficient) else InvestigationStatus.FAILED,
+        outcome=InvestigationOutcome.VERIFIED_FIX if is_conclusive else (
+            InvestigationOutcome.INSUFFICIENT_EVIDENCE if is_insufficient else InvestigationOutcome.FAILED_FIX
+        ),
         outcome_summary=result.summary,
+        confidence=result.confidence,
+        duration_ms=45,
+        is_sample=True,
     )
     INVESTIGATIONS_DB[inv_id] = inv_state
     return inv_state

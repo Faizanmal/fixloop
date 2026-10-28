@@ -69,7 +69,16 @@ export function RecentInvestigations({
                   className="hover:bg-slate-800/30 transition-colors group cursor-pointer"
                   onClick={() => onSelectHistoryItem(item)}
                 >
-                  <td className="py-3 text-cyan-300 font-bold">{item.id}</td>
+                  <td className="py-3 text-cyan-300 font-bold">
+                    <div className="flex items-center gap-1.5">
+                      <span>{item.id}</span>
+                      {item.isSample && (
+                        <span className="rounded bg-slate-800 border border-slate-700 px-1.5 py-0.5 text-[9px] font-mono text-slate-400 font-normal">
+                          Sample
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td className="py-3 text-slate-200">
                     <span className="font-medium">
                       {item.scenarioName.replace("scenario_", "").replace(/_/g, " ")}

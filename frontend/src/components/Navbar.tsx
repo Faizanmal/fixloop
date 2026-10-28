@@ -120,20 +120,20 @@ export function Navbar({
 
           {/* API Docs Link */}
           <a
-            href="http://127.0.0.1:8000/docs"
+            href="/docs"
             target="_blank"
             rel="noopener noreferrer"
-            className="hidden sm:inline-flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900/60 px-2.5 py-1.5 text-xs font-mono text-slate-400 hover:text-slate-200 hover:border-slate-700 transition-colors"
-            title="Open FastAPI Swagger Documentation"
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900/60 px-2 sm:px-2.5 py-1.5 text-xs font-mono text-slate-400 hover:text-slate-200 hover:border-slate-700 transition-colors"
+            title="Open FastAPI Swagger Documentation (forwarded via Next.js rewrites)"
           >
             <span>API Docs</span>
             <ExternalLink className="h-3 w-3" />
           </a>
 
-          {/* Benchmark Scorecard Button */}
+          {/* Benchmark Scorecard Button - reachable on all screen sizes */}
           <button
             onClick={() => setShowBenchmark(true)}
-            className="hidden md:inline-flex items-center gap-1.5 rounded-lg border border-indigo-700/60 bg-indigo-950/40 hover:bg-indigo-900/60 px-2.5 py-1.5 text-xs font-mono font-medium text-indigo-300 transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-700/60 bg-indigo-950/40 hover:bg-indigo-900/60 px-2 sm:px-2.5 py-1.5 text-xs font-mono font-medium text-indigo-300 transition-colors cursor-pointer"
             title="View reproducible 7-scenario benchmark scorecard"
           >
             <Trophy className="h-3.5 w-3.5 text-amber-400" />

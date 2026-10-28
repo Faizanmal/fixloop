@@ -48,6 +48,14 @@ const nextConfig: NextConfig = {
           source: "/api/:path*",
           destination: `${cleanBackend}/api/:path*`,
         },
+        {
+          source: "/docs",
+          destination: `${cleanBackend}/docs`,
+        },
+        {
+          source: "/openapi.json",
+          destination: `${cleanBackend}/openapi.json`,
+        },
       ];
     }
     return [];

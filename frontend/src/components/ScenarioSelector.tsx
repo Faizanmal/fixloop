@@ -92,7 +92,7 @@ export function ScenarioSelector({
                   : "text-slate-400 hover:text-slate-200"
               }`}
             >
-              Preset Benchmarks (4)
+              Preset Benchmarks ({scenarios.length})
             </button>
             <button
               onClick={() => setActiveTab("custom")}

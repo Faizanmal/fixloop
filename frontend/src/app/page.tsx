@@ -68,7 +68,8 @@ export default function Home() {
           setHistory((prev) => {
             const ids = new Set(prev.map((p) => p.id));
             const uniqueNew = recentRuns.filter((r) => !ids.has(r.id));
-            return [...prev, ...uniqueNew];
+            const merged = [...prev, ...uniqueNew];
+            return merged.slice(0, 10);
           });
         }
       } catch (err: unknown) {
@@ -91,22 +92,27 @@ export default function Home() {
     scenarios.find((s) => s.id === selectedScenarioId) || scenarios[0];
 
   // 1. Run Investigation Handler
-  const handleStartInvestigation = async (customLogs?: string) => {
+  const handleStartInvestigation = async (
+    customLogs?: string,
+    targetServiceId?: string
+  ) => {
     setIsInvestigating(true);
     setErrorMessage(null);
     setDiagnosis(null);
     setPatchProposal(null);
     setVerificationReport(null);
     const startTime = performance.now();
+    const effectiveTarget = targetServiceId || selectedScenarioId;
+    const isCustom = Boolean(customLogs && customLogs.trim());
 
     try {
       // Step A: Run real diagnosis via FastAPI
-      const result = await apiClient.runDiagnosis(selectedScenarioId, customLogs);
+      const result = await apiClient.runDiagnosis(effectiveTarget, customLogs);
       setDiagnosis(result);
 
-      // Step B: If conclusive, fetch real proposed patch diff from backend
-      if (result.status === "diagnosis_available" && result.confidence >= 0.9) {
-        const patch = await apiClient.fetchPatchProposal(selectedScenarioId);
+      // Step B: If conclusive preset scenario, fetch real proposed patch diff from backend
+      if (!isCustom && result.status === "diagnosis_available" && result.confidence >= 0.9) {
+        const patch = await apiClient.fetchPatchProposal(effectiveTarget);
         if (patch) {
           setPatchProposal(patch);
         }
@@ -115,14 +121,15 @@ export default function Home() {
       // Record in recent history
       const durationMs = Math.round(performance.now() - startTime);
       const newHistoryItem: InvestigationHistoryItem = {
-        id: `RUN-${Date.now().toString().slice(-4)}`,
-        scenarioName: selectedScenarioId,
+        id: result.investigation_id || `RUN-${Date.now().toString().slice(-4)}`,
+        scenarioName: effectiveTarget,
         status: result.status,
         confidence: result.confidence,
         durationMs,
         timestamp: new Date().toLocaleTimeString(),
+        isSample: false,
       };
-      setHistory((prev) => [newHistoryItem, ...prev.slice(0, 9)]);
+      setHistory((prev) => [newHistoryItem, ...prev].slice(0, 10));
     } catch (err: unknown) {
       setErrorMessage(
         err instanceof Error
@@ -136,8 +143,9 @@ export default function Home() {
 
   // 2. Custom Logs Diagnostic Handler
   const handleCustomDiagnose = async (serviceName: string, logs: string) => {
-    setSelectedScenarioId(serviceName);
-    await handleStartInvestigation(logs);
+    const target = serviceName.trim() || "custom-service";
+    setSelectedScenarioId(target);
+    await handleStartInvestigation(logs, target);
   };
 
   // 3. Sandboxed Verification Execution Handler
@@ -195,17 +203,22 @@ export default function Home() {
       setDiagnosis(diagResult);
 
       const durationMs = Math.round(performance.now() - startTime);
-      setHistory((prev) => [
-        {
-          id: `DEMO-${Date.now().toString().slice(-4)}`,
-          scenarioName: "scenario_b_healthcheck_mismatch",
-          status: diagResult.status,
-          confidence: diagResult.confidence,
-          durationMs,
-          timestamp: new Date().toLocaleTimeString(),
-        },
-        ...prev.slice(0, 9),
-      ]);
+      setHistory((prev) =>
+        [
+          {
+            id:
+              diagResult.investigation_id ||
+              `DEMO-${Date.now().toString().slice(-4)}`,
+            scenarioName: "scenario_b_healthcheck_mismatch",
+            status: diagResult.status,
+            confidence: diagResult.confidence,
+            durationMs,
+            timestamp: new Date().toLocaleTimeString(),
+            isSample: false,
+          },
+          ...prev,
+        ].slice(0, 10)
+      );
 
       // Step 2: Fetch Patch Proposal
       const patch = await apiClient.fetchPatchProposal(

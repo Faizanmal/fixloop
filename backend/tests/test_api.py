@@ -109,3 +109,72 @@ async def test_scenarios_endpoint():
         assert "scenario_b_healthcheck_mismatch" in ids
         assert "scenario_c_port_mismatch" in ids
         assert "scenario_d_insufficient_evidence" in ids
+
+
+@pytest.mark.asyncio
+async def test_diagnose_custom_logs_missing_env():
+    """Verify custom pasted logs with missing env var diagnose DATABASE_URL and record in investigations."""
+    transport = ASGITransport(app=app)
+    custom_payload = {
+        "service_name": "custom-auth-service",
+        "logs": "ERROR: KeyError 'DATABASE_URL' at app/config.py line 12\nFailed to start server",
+    }
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/v1/diagnose", json=custom_payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "diagnosis_available"
+        assert "DATABASE_URL" in data["summary"]
+        assert any("DATABASE_URL" in h["description"] for h in data["hypotheses"])
+        # Ensure it NEVER falls back to Scenario B healthcheck
+        assert "/health" not in data["summary"].lower() or "healthcheck" not in data["summary"].lower()
+
+        # Check that it recorded in /investigations
+        inv_res = await client.get("/investigations")
+        assert inv_res.status_code == 200
+        inv_data = inv_res.json()
+        matching = [inv for inv in inv_data if inv["scenario_name"] == "custom-auth-service"]
+        assert len(matching) > 0
+        assert "DATABASE_URL" in matching[-1]["outcome_summary"]
+
+
+@pytest.mark.asyncio
+async def test_diagnose_custom_logs_healthcheck_mismatch():
+    """Verify custom pasted logs with healthcheck 404 diagnose probe mismatch."""
+    transport = ASGITransport(app=app)
+    custom_payload = {
+        "service_name": "billing-service",
+        "logs": "Health check probe failed: GET http://127.0.0.1:8000/health returned 404 Not Found\nApplication exposes route /healthz\nContainer marked unhealthy",
+        "configuration_files": {
+            "docker-compose.yml": "services:\n  billing-service:\n    healthcheck:\n      test: ['CMD', 'curl', '-f', 'http://localhost:8000/health']"
+        }
+    }
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/v1/diagnose", json=custom_payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] in ["diagnosis_available", "insufficient_evidence"]
+        assert any(k in data["summary"].lower() for k in ["health", "route", "probe", "404", "mismatch"])
+        # Ensure it does NOT report an unrelated database error
+        assert "database_url" not in data["summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_diagnose_custom_logs_unrelated_noise():
+    """Verify custom pasted logs with unrelated noise return insufficient_evidence, never an unrelated preset."""
+    transport = ASGITransport(app=app)
+    custom_payload = {
+        "service_name": "worker-pool",
+        "logs": "User 4821 logged in successfully from IP 192.168.1.50\nTask queue processed 14 jobs successfully\nWorker status: idle\nAll background tasks normal",
+    }
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/v1/diagnose", json=custom_payload)
+        assert response.status_code == 200
+        data = response.json()
+        # Must return insufficient evidence, NOT Scenario B healthcheck mismatch!
+        assert data["status"] == "insufficient_evidence"
+        assert "healthcheck" not in data["summary"].lower() or "probe" not in data["summary"].lower()
+        assert "database_url" not in data["summary"].lower()
+        assert any(w in data["summary"].lower() for w in ["cannot be determined", "insufficient", "no corroborating", "no failure", "idle", "normal"])
+        assert len(data["evidence"]) > 0
+
