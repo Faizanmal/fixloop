@@ -242,4 +242,39 @@ async def test_diagnose_then_verify_persists_in_investigations():
         assert single_data["outcome"] == "VERIFIED_FIX"
         assert single_data["verification_report"] is not None
 
+    @pytest.mark.asyncio
+    async def test_idempotent_diagnose_creates_single_investigation(self, client):
+        """Verify that two identical rapid submits with the same idempotency key create exactly one row."""
+        key = f"idem-test-{time.time()}"
+        payload = {
+            "service_name": "custom-auth-service",
+            "logs": "ERROR: auth token expired for user 42 in session middleware",
+            "idempotency_key": key,
+        }
+
+        # Rapid submit 1
+        resp1 = await client.post("/api/v1/diagnose", json=payload)
+        assert resp1.status_code == 200
+        data1 = resp1.json()
+        inv_id1 = data1.get("investigation_id")
+        assert inv_id1 is not None
+
+        # Rapid submit 2 with exact same idempotency key
+        resp2 = await client.post("/api/v1/diagnose", json=payload)
+        assert resp2.status_code == 200
+        data2 = resp2.json()
+        inv_id2 = data2.get("investigation_id")
+
+        # Must return the same investigation id and marked as cached
+        assert inv_id1 == inv_id2
+        assert data2.get("is_cached") is True
+
+        # Check /investigations store has exactly ONE row with this id/key
+        invs_res = await client.get("/investigations")
+        assert invs_res.status_code == 200
+        invs = invs_res.json()
+        matching_runs = [i for i in invs if i.get("id") == inv_id1 or i.get("idempotency_key") == key]
+        assert len(matching_runs) == 1
+
+
 

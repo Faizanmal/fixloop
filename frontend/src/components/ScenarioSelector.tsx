@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { ScenarioInfo } from "@/lib/api";
 import {
   FileWarning,
@@ -13,6 +13,8 @@ import {
   UploadCloud,
   Sparkles,
   Loader2,
+  AlertTriangle,
+  RotateCcw,
 } from "lucide-react";
 
 interface ScenarioSelectorProps {
@@ -21,6 +23,7 @@ interface ScenarioSelectorProps {
   onSelectScenario: (id: string) => void;
   onStartInvestigation: () => void;
   onCustomDiagnose?: (serviceName: string, logs: string) => void;
+  onCancelInvestigation?: () => void;
   isInvestigating: boolean;
 }
 
@@ -30,25 +33,29 @@ export function ScenarioSelector({
   onSelectScenario,
   onStartInvestigation,
   onCustomDiagnose,
+  onCancelInvestigation,
   isInvestigating,
 }: ScenarioSelectorProps) {
   const [activeTab, setActiveTab] = useState<"scenarios" | "custom">("scenarios");
   const [customServiceName, setCustomServiceName] = useState<string>("auth-service");
   const [customLogs, setCustomLogs] = useState<string>("");
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
+  const isSubmittingRef = useRef<boolean>(false);
+  const startTimeRef = useRef<number>(0);
 
   useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (isInvestigating) {
-      setElapsedSeconds(0);
-      timer = setInterval(() => {
-        setElapsedSeconds((prev) => prev + 1);
-      }, 1000);
-    } else {
-      setElapsedSeconds(0);
+    if (!isInvestigating) {
+      isSubmittingRef.current = false;
+      return;
     }
+    startTimeRef.current = Date.now();
+    const timer = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
+    }, 1000);
     return () => clearInterval(timer);
   }, [isInvestigating]);
+
+  const displayElapsedSeconds = isInvestigating ? elapsedSeconds : 0;
 
   const getScenarioIcon = (id: string) => {
     if (id.includes("scenario_a")) return FileWarning;
@@ -72,8 +79,12 @@ export function ScenarioSelector({
 
   const handleCustomSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customLogs.trim()) return;
+    if (!customLogs.trim() || isInvestigating || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
     onCustomDiagnose?.(customServiceName, customLogs);
+    setTimeout(() => {
+      isSubmittingRef.current = false;
+    }, 1000);
   };
 
   return (
@@ -261,31 +272,71 @@ export function ScenarioSelector({
             </div>
 
             {isInvestigating && (
-              <div className="rounded-lg border border-cyan-500/40 bg-cyan-950/30 p-3.5 text-xs font-mono backdrop-blur animate-in fade-in">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="flex items-center gap-2 font-semibold text-cyan-300">
-                    <Loader2 className="h-4 w-4 animate-spin text-cyan-400" />
-                    {elapsedSeconds < 3
-                      ? "1/3 Sanitizing & ingesting container logs..."
-                      : elapsedSeconds < 25
-                      ? "2/3 Querying Nebius Token Factory (NVIDIA Nemotron)..."
-                      : "3/3 Calibrating hypothesis confidence & evidence ranking..."}
-                  </span>
-                  <span className="text-slate-400 font-bold text-[11px]">
-                    Elapsed: {elapsedSeconds}s
-                  </span>
+              <div className="space-y-3">
+                <div className="rounded-lg border border-cyan-500/40 bg-cyan-950/30 p-3.5 text-xs font-mono backdrop-blur animate-in fade-in">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="flex items-center gap-2 font-semibold text-cyan-300">
+                      <Loader2 className="h-4 w-4 animate-spin text-cyan-400" />
+                      {displayElapsedSeconds < 3
+                        ? "1/3 Sanitizing & ingesting container logs..."
+                        : displayElapsedSeconds < 25
+                        ? "2/3 Querying Nebius Token Factory (NVIDIA Nemotron)..."
+                        : "3/3 Calibrating hypothesis confidence & evidence ranking..."}
+                    </span>
+                    <span className="text-slate-400 font-bold text-[11px]">
+                      Elapsed: {displayElapsedSeconds}s
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                    <div
+                      className="bg-gradient-to-r from-cyan-500 to-indigo-500 h-1.5 rounded-full transition-all duration-500"
+                      style={{
+                        width: `${Math.min(95, Math.max(10, displayElapsedSeconds * 2.5))}%`,
+                      }}
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-2">
+                    Deep LLM inference via Nebius typically takes 20–45s for container trace analysis. Engine will automatically timeout if VM does not respond within 90s.
+                  </p>
                 </div>
-                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                  <div
-                    className="bg-gradient-to-r from-cyan-500 to-indigo-500 h-1.5 rounded-full transition-all duration-500"
-                    style={{
-                      width: `${Math.min(95, Math.max(10, elapsedSeconds * 2.5))}%`,
-                    }}
-                  />
-                </div>
-                <p className="text-[11px] text-slate-400 mt-2">
-                  Deep LLM inference via Nebius typically takes 20–45s for container trace analysis. Engine will automatically timeout if VM does not respond within 120s.
-                </p>
+
+                {displayElapsedSeconds >= 90 && (
+                  <div className="rounded-lg border border-amber-500/50 bg-amber-950/40 p-4 text-xs font-mono text-amber-200 backdrop-blur animate-in fade-in">
+                    <div className="flex items-start gap-2.5">
+                      <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <div className="font-bold text-amber-300">
+                          This is taking longer than expected ({displayElapsedSeconds}s)
+                        </div>
+                        <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                          Nebius Token Factory inference or VM response took longer than 90 seconds. You can click Retry to cancel and re-submit a fresh request.
+                        </p>
+                        <div className="mt-3 flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onCancelInvestigation?.();
+                              setTimeout(() => {
+                                onCustomDiagnose?.(customServiceName, customLogs);
+                              }, 150);
+                            }}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-600 bg-amber-900/80 px-3 py-1.5 text-xs font-mono font-medium text-amber-100 hover:bg-amber-800 transition-colors cursor-pointer"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            <span>Retry</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onCancelInvestigation?.()}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-1.5 text-xs font-mono text-slate-300 hover:text-white transition-colors cursor-pointer"
+                          >
+                            <span>Cancel</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -301,7 +352,7 @@ export function ScenarioSelector({
                 {isInvestigating ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin text-cyan-200" />
-                    <span>Diagnosing with Nebius ({elapsedSeconds}s)...</span>
+                    <span>Diagnosing with Nebius ({displayElapsedSeconds}s)...</span>
                   </>
                 ) : (
                   <>

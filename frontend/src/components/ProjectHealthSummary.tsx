@@ -40,18 +40,17 @@ export function ProjectHealthSummary({
         </div>
         <div className="flex items-center gap-2">
           <span className="text-lg font-bold text-white font-mono">
-            {isDockerUp ? "Docker Daemon" : "Disposable Sandbox"}
+            {isDockerUp ? "Docker Daemon" : "Sandbox: file-check"}
           </span>
-          {isDockerUp ? (
-            <span className="h-2 w-2 rounded-full bg-emerald-400" title="Docker daemon active" />
-          ) : (
-            <span className="h-2 w-2 rounded-full bg-amber-400" title="Filesystem sandbox active" />
-          )}
+          <span
+            className="h-2 w-2 rounded-full bg-emerald-400"
+            title={isDockerUp ? "Docker daemon active" : "Sandbox file-check mode active"}
+          />
         </div>
         <p className="mt-1 text-xs text-slate-400 leading-relaxed">
           {isDockerUp
             ? `Docker Engine ${dockerInfo?.server_version || "Active"}`
-            : "Isolated ephemeral filesystem (Zero socket exposure)"}
+            : "Sandbox: file-check mode (Zero socket exposure)"}
         </p>
       </div>
 

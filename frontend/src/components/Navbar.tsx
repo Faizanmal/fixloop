@@ -75,14 +75,18 @@ export function Navbar({
             </span>
           </div>
 
-          {/* Docker Status Badge */}
+          {/* Docker / Sandbox Status Badge */}
           <div
             className="hidden md:flex items-center gap-1.5 rounded-lg bg-slate-900/90 px-2.5 py-1.5 text-xs text-slate-300 ring-1 ring-slate-800"
-            title={isDockerUp ? `Docker active: ${dockerInfo?.server_version}` : `Sandbox: ${dockerInfo?.reason || "Filesystem tempdir"}`}
+            title={
+              isDockerUp
+                ? `Docker Live: ${dockerInfo?.server_version || "Active"}`
+                : "Sandbox: file-check mode (Disposable filesystem verification active)"
+            }
           >
             <Server className="h-3.5 w-3.5 text-cyan-400" />
             <span className="font-mono text-[11px]">
-              {isDockerUp ? "Docker Live" : "Isolated Sandbox"}
+              {isDockerUp ? "Docker Live" : "Sandbox: file-check mode"}
             </span>
           </div>
 

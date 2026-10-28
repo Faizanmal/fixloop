@@ -57,6 +57,14 @@ export default function Home() {
   const [isLoadingInspect, setIsLoadingInspect] = useState<boolean>(false);
   const [inspectError, setInspectError] = useState<string | null>(null);
 
+  const selectedScenarioIdRef = useRef(selectedScenarioId);
+  useEffect(() => {
+    selectedScenarioIdRef.current = selectedScenarioId;
+  }, [selectedScenarioId]);
+
+  // In-flight request protection to prevent duplicate runs
+  const inFlightRef = useRef<boolean>(false);
+
   // In-memory cache for fast historical run inspection
   const investigationCache = useRef<
     Map<
@@ -84,6 +92,19 @@ export default function Home() {
 
         const recentRuns = await apiClient.fetchRecentInvestigations();
         if (isMounted && recentRuns && recentRuns.length > 0) {
+          // If in flight and history refresh finishes first, reset spinner immediately (Issue 2)
+          if (inFlightRef.current) {
+            const hasRecentMatch = recentRuns.some(
+              (r) =>
+                r.scenarioName === selectedScenarioIdRef.current &&
+                Date.now() - new Date(r.startedAtIso || 0).getTime() < 90000
+            );
+            if (hasRecentMatch) {
+              inFlightRef.current = false;
+              setIsInvestigating(false);
+            }
+          }
+
           setHistory((prev) => {
             const map = new Map<string, InvestigationHistoryItem>();
             for (const item of prev) {
@@ -132,6 +153,8 @@ export default function Home() {
     customLogs?: string,
     targetServiceId?: string
   ) => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setIsInvestigating(true);
     setErrorMessage(null);
     setDiagnosis(null);
@@ -144,8 +167,9 @@ export default function Home() {
     const effectiveTarget = targetServiceId || selectedScenarioId;
 
     try {
-      // Step A: Run real diagnosis via FastAPI
-      const result = await apiClient.runDiagnosis(effectiveTarget, customLogs);
+      // Step A: Run real diagnosis via FastAPI with idempotency key
+      const idempotencyKey = `req-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const result = await apiClient.runDiagnosis(effectiveTarget, customLogs, idempotencyKey);
       setDiagnosis(result);
 
       // Step B: Fetch real proposed patch diff from backend
@@ -159,8 +183,11 @@ export default function Home() {
         }
       }
 
-      // Record in recent history
-      const durationMs = Math.round(performance.now() - startTime);
+      // Record in recent history using server timestamp
+      const serverTimestamp = result.started_at_iso || new Date().toISOString();
+      const durationMs = result.is_cached && result.original_duration_ms
+        ? result.original_duration_ms
+        : Math.round(performance.now() - startTime);
       const invId =
         result.investigation_id || `RUN-${Date.now().toString().slice(-4)}`;
       const newHistoryItem: InvestigationHistoryItem = {
@@ -169,8 +196,11 @@ export default function Home() {
         status: result.status,
         confidence: result.confidence,
         durationMs,
-        timestamp: new Date().toLocaleTimeString(),
+        timestamp: new Date(serverTimestamp).toLocaleTimeString(),
+        startedAtIso: serverTimestamp,
         isSample: false,
+        isCached: Boolean(result.is_cached),
+        originalDurationMs: result.original_duration_ms || null,
         diagnosis: result,
         patchProposal: patch,
         verificationReport: null,
@@ -194,6 +224,7 @@ export default function Home() {
           : "An unexpected error occurred during diagnosis."
       );
     } finally {
+      inFlightRef.current = false;
       setIsInvestigating(false);
     }
   };
@@ -271,6 +302,8 @@ export default function Home() {
 
   // 4. Quick Demo Trigger for Hackathon Judges
   const handleQuickDemo = async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setShowDemoNotification(true);
     setSelectedPresetId("scenario_b_healthcheck_mismatch");
     setSelectedScenarioId("scenario_b_healthcheck_mismatch");
@@ -286,13 +319,19 @@ export default function Home() {
     const startTime = performance.now();
 
     try {
+      const idempotencyKey = `demo-${Date.now()}`;
       // Step 1: Run Diagnosis on Scenario B
       const diagResult = await apiClient.runDiagnosis(
-        "scenario_b_healthcheck_mismatch"
+        "scenario_b_healthcheck_mismatch",
+        undefined,
+        idempotencyKey
       );
       setDiagnosis(diagResult);
 
-      const durationMs = Math.round(performance.now() - startTime);
+      const serverTimestamp = diagResult.started_at_iso || new Date().toISOString();
+      const durationMs = diagResult.is_cached && diagResult.original_duration_ms
+        ? diagResult.original_duration_ms
+        : Math.round(performance.now() - startTime);
       const invId =
         diagResult.investigation_id ||
         `DEMO-${Date.now().toString().slice(-4)}`;
@@ -302,8 +341,11 @@ export default function Home() {
         status: diagResult.status,
         confidence: diagResult.confidence,
         durationMs,
-        timestamp: new Date().toLocaleTimeString(),
+        timestamp: new Date(serverTimestamp).toLocaleTimeString(),
+        startedAtIso: serverTimestamp,
         isSample: false,
+        isCached: Boolean(diagResult.is_cached),
+        originalDurationMs: diagResult.original_duration_ms || null,
         diagnosis: diagResult,
         patchProposal: null,
         verificationReport: null,
@@ -366,6 +408,7 @@ export default function Home() {
         err instanceof Error ? err.message : "Demo execution failed."
       );
     } finally {
+      inFlightRef.current = false;
       setIsInvestigating(false);
       setIsVerifying(false);
     }
@@ -637,6 +680,10 @@ export default function Home() {
           }}
           onStartInvestigation={() => handleStartPresetInvestigation()}
           onCustomDiagnose={handleCustomDiagnose}
+          onCancelInvestigation={() => {
+            inFlightRef.current = false;
+            setIsInvestigating(false);
+          }}
           isInvestigating={isInvestigating}
         />
 
@@ -731,14 +778,41 @@ export default function Home() {
             {!isLoadingInspect && !inspectError && diagnosis && (
               <>
                 {/* Hypotheses & Calibrated Confidence */}
-                <HypothesesList
-                  diagnosis={diagnosis}
-                  onProceedToPatch={() => {
-                    const el = document.getElementById("patch-review-section");
-                    el?.scrollIntoView({ behavior: "smooth" });
-                  }}
-                  canPatch={canPatch}
-                />
+                {(() => {
+                  const activeItem = inspectedRunId
+                    ? history.find((h) => h.id === inspectedRunId)
+                    : (diagnosis.investigation_id
+                        ? history.find((h) => h.id === diagnosis.investigation_id)
+                        : null);
+                  const effectiveStatus =
+                    activeItem?.status ||
+                    (verificationReport?.status === "verified_fixed"
+                      ? "verified_fixed"
+                      : verificationReport?.status === "verification_failed"
+                      ? "verification_failed"
+                      : diagnosis.status === "insufficient_evidence"
+                      ? "insufficient_evidence"
+                      : diagnosis.confidence < 0.9
+                      ? "patch_blocked"
+                      : diagnosis.status);
+                  const effectiveDuration = activeItem?.durationMs;
+                  const isCached = activeItem?.isCached;
+
+                  return (
+                    <HypothesesList
+                      diagnosis={diagnosis}
+                      onProceedToPatch={() => {
+                        const el = document.getElementById("patch-review-section");
+                        el?.scrollIntoView({ behavior: "smooth" });
+                      }}
+                      canPatch={canPatch}
+                      runStatus={effectiveStatus}
+                      verificationReport={verificationReport}
+                      durationMs={effectiveDuration}
+                      isCached={isCached}
+                    />
+                  );
+                })()}
 
                 {/* Collected Empirical Evidence */}
                 <EvidenceViewer evidence={diagnosis.evidence} />
@@ -807,14 +881,26 @@ export default function Home() {
                 })()}
 
                 {/* Verification Report Card */}
-                {verificationReport && (
-                  <VerificationReportCard
-                    report={verificationReport}
-                    scenarioName={selectedScenarioId}
-                    onRetry={() => handleApproveAndVerify(true)}
-                    isVerifying={isVerifying}
-                  />
-                )}
+                {verificationReport && (() => {
+                  const activeItem = inspectedRunId
+                    ? history.find((h) => h.id === inspectedRunId)
+                    : (diagnosis.investigation_id
+                        ? history.find((h) => h.id === diagnosis.investigation_id)
+                        : null);
+                  const totalDuration = activeItem?.durationMs || verificationReport.duration_ms;
+                  const isCached = activeItem?.isCached;
+
+                  return (
+                    <VerificationReportCard
+                      report={verificationReport}
+                      scenarioName={selectedScenarioId}
+                      onRetry={() => handleApproveAndVerify(true)}
+                      isVerifying={isVerifying}
+                      totalDurationMs={totalDuration}
+                      isCached={isCached}
+                    />
+                  );
+                })()}
               </>
             )}
           </div>

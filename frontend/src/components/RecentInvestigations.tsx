@@ -139,10 +139,26 @@ export function RecentInvestigations({
                     {(item.confidence * 100).toFixed(0)}%
                   </td>
                   <td className="py-3 text-slate-400">
-                    {formatDuration(item.durationMs)}
+                    <div className="flex flex-col gap-0.5">
+                      <div className="flex items-center gap-1.5">
+                        <span>{formatDuration(item.durationMs)}</span>
+                        {item.isCached && (
+                          <span className="rounded bg-indigo-500/20 border border-indigo-500/40 px-1.5 py-0.2 text-[9px] font-mono text-indigo-300 font-semibold">
+                            Cached result
+                          </span>
+                        )}
+                      </div>
+                      {item.isCached && typeof item.originalDurationMs === "number" && item.originalDurationMs !== item.durationMs && (
+                        <span className="text-[10px] text-slate-500">
+                          Orig: {formatDuration(item.originalDurationMs)}
+                        </span>
+                      )}
+                    </div>
                   </td>
-                  <td className="py-3 text-slate-500 text-[11px]">
-                    {item.timestamp}
+                  <td className="py-3 text-slate-500 text-[11px]" title={item.startedAtIso || item.timestamp}>
+                    {item.startedAtIso
+                      ? new Date(item.startedAtIso).toLocaleTimeString()
+                      : item.timestamp}
                   </td>
                   <td className="py-3 text-right">
                     <button

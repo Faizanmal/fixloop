@@ -106,6 +106,10 @@ export interface DiagnoseResponse {
   next_action: string;
   audit_log?: AuditLog;
   investigation_id?: string;
+  is_cached?: boolean;
+  original_duration_ms?: number | null;
+  started_at_iso?: string | null;
+  idempotency_key?: string | null;
 }
 
 export interface PatchProposal {
@@ -161,7 +165,10 @@ export interface InvestigationHistoryItem {
   confidence: number;
   durationMs: number;
   timestamp: string;
+  startedAtIso?: string;
   isSample?: boolean;
+  isCached?: boolean;
+  originalDurationMs?: number | null;
   diagnosis?: DiagnoseResponse | null;
   patchProposal?: PatchProposal | null;
   verificationReport?: VerificationReport | null;
@@ -323,14 +330,18 @@ class FixLoopApiClient {
 
   async runDiagnosis(
     scenarioName: string,
-    customLogs?: string
+    customLogs?: string,
+    idempotencyKey?: string
   ): Promise<DiagnoseResponse> {
-    const payload = customLogs
+    const payload: Record<string, unknown> = customLogs
       ? { service_name: scenarioName, logs: customLogs }
       : { service_name: scenarioName };
+    if (idempotencyKey) {
+      payload.idempotency_key = idempotencyKey;
+    }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 120000);
+    const timeoutId = setTimeout(() => controller.abort(), 90000);
 
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/diagnose`, {
@@ -364,7 +375,7 @@ class FixLoopApiClient {
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") {
         throw new Error(
-          "Diagnosis timed out after 120 seconds. Nebius Token Factory inference or VM response took longer than expected. Please try again."
+          "This is taking longer than expected (timed out after 90 seconds). Nebius inference or VM response delayed. Please click Retry."
         );
       }
       throw err;
@@ -559,16 +570,26 @@ class FixLoopApiClient {
                   item.id.toUpperCase().startsWith("SAMPLE-")
               );
 
+            const startedAtRaw =
+              (item.started_at as string) ||
+              (item.started_at_iso as string) ||
+              (item.created_at as string) ||
+              "";
+            const formattedTimestamp = startedAtRaw
+              ? new Date(startedAtRaw).toLocaleTimeString()
+              : "";
+
             return {
               id: (item.id as string) || `INV-${idx + 1}`,
               scenarioName,
               status,
               confidence,
               durationMs,
-              timestamp: (item.started_at as string)
-                ? new Date(item.started_at as string).toLocaleTimeString()
-                : new Date().toLocaleTimeString(),
+              timestamp: formattedTimestamp || (item.timestamp as string) || "",
+              startedAtIso: startedAtRaw,
               isSample,
+              isCached: Boolean(item.is_cached),
+              originalDurationMs: (item.original_duration_ms as number) || null,
               diagnosis: (item.diagnosis as DiagnoseResponse) || null,
               patchProposal: (item.patch_proposal as PatchProposal) || null,
               verificationReport: (item.verification_report as VerificationReport) || null,

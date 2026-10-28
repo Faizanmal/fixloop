@@ -50,6 +50,7 @@ router = APIRouter()
 # In-memory store for investigation runs & diagnoses
 INVESTIGATIONS_DB: Dict[str, InvestigationState] = {}
 INVESTIGATION_DIAGNOSES: Dict[str, DiagnoseResponse] = {}
+IDEMPOTENCY_STORE: Dict[str, Any] = {}
 
 SCENARIOS = [
     {
@@ -136,7 +137,12 @@ def check_docker_daemon() -> Dict[str, Any]:
     """Inspects Docker daemon availability safely."""
     docker_cli = shutil.which("docker")
     if not docker_cli:
-        return {"available": False, "reason": "Docker CLI not found on PATH"}
+        return {
+            "available": False,
+            "mode": "file_check",
+            "reason": "Sandbox: file-check mode",
+            "display": "Sandbox: file-check mode",
+        }
     try:
         proc = subprocess.run(
             ["docker", "info", "--format", "{{.ServerVersion}}"],
@@ -145,13 +151,26 @@ def check_docker_daemon() -> Dict[str, Any]:
             timeout=3,
         )
         if proc.returncode == 0:
-            return {"available": True, "server_version": proc.stdout.strip()}
+            return {
+                "available": True,
+                "mode": "docker",
+                "server_version": proc.stdout.strip(),
+                "display": "Docker Live",
+            }
         else:
-            return {"available": False, "reason": proc.stderr.strip() or "Docker daemon not responding"}
-    except subprocess.TimeoutExpired:
-        return {"available": False, "reason": "Docker daemon connection timed out (service likely stopped)"}
+            return {
+                "available": False,
+                "mode": "file_check",
+                "reason": "Sandbox: file-check mode",
+                "display": "Sandbox: file-check mode",
+            }
     except Exception as exc:
-        return {"available": False, "reason": str(exc)}
+        return {
+            "available": False,
+            "mode": "file_check",
+            "reason": "Sandbox: file-check mode",
+            "display": "Sandbox: file-check mode",
+        }
 
 
 async def get_readiness_status() -> Dict[str, Any]:
@@ -220,6 +239,14 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
     """
     start_time = time.perf_counter()
 
+    # Deduplicate rapid repeat submits with the same idempotency key (Issue 3 & 4)
+    if request.idempotency_key and request.idempotency_key in IDEMPOTENCY_STORE:
+        cached_resp, cached_inv = IDEMPOTENCY_STORE[request.idempotency_key]
+        cached_copy = cached_resp.model_copy()
+        cached_copy.is_cached = True
+        cached_copy.original_duration_ms = cached_inv.duration_ms
+        return cached_copy
+
     # 1. If service_name maps to a local scenario fixture directory, run DiagnosticEngine
     candidate_dir = get_scenario_dir(request.service_name) if request.service_name else None
     if candidate_dir:
@@ -231,6 +258,7 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
         )
         elapsed_ms = max(10, int((time.perf_counter() - start_time) * 1000))
         inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
+        now_dt = utc_now()
         is_conclusive = result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
         is_insufficient = result.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
         diag_resp = DiagnoseResponse(
@@ -243,6 +271,9 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             confidence=result.confidence,
             next_action=result.next_action,
             investigation_id=inv_id,
+            idempotency_key=request.idempotency_key,
+            is_cached=False,
+            started_at_iso=now_dt.isoformat(),
         )
         outcome = (
             InvestigationOutcome.INSUFFICIENT_EVIDENCE
@@ -264,9 +295,14 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             duration_ms=elapsed_ms,
             is_sample=False,
             diagnosis=diag_resp,
+            started_at=now_dt,
+            updated_at=now_dt,
+            idempotency_key=request.idempotency_key,
         )
         INVESTIGATION_DIAGNOSES[inv_id] = diag_resp
         INVESTIGATIONS_DB[inv_id] = inv_state
+        if request.idempotency_key:
+            IDEMPOTENCY_STORE[request.idempotency_key] = (diag_resp, inv_state)
         return diag_resp
 
     # 2. Input validation for ad-hoc requests
@@ -287,9 +323,13 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
         diagnosis = await client.diagnose(request)
         elapsed_ms = max(10, int((time.perf_counter() - start_time) * 1000))
         inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
+        now_dt = utc_now()
         is_conclusive = diagnosis.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
         is_insufficient = diagnosis.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
         diagnosis.investigation_id = inv_id
+        diagnosis.idempotency_key = request.idempotency_key
+        diagnosis.is_cached = False
+        diagnosis.started_at_iso = now_dt.isoformat()
         outcome = (
             InvestigationOutcome.INSUFFICIENT_EVIDENCE
             if is_insufficient
@@ -310,9 +350,14 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             duration_ms=elapsed_ms,
             is_sample=False,
             diagnosis=diagnosis,
+            started_at=now_dt,
+            updated_at=now_dt,
+            idempotency_key=request.idempotency_key,
         )
         INVESTIGATION_DIAGNOSES[inv_id] = diagnosis
         INVESTIGATIONS_DB[inv_id] = inv_state
+        if request.idempotency_key:
+            IDEMPOTENCY_STORE[request.idempotency_key] = (diagnosis, inv_state)
         return diagnosis
     except NebiusAuthenticationError as exc:
         raise HTTPException(
@@ -639,6 +684,13 @@ async def list_investigations() -> List[InvestigationState]:
 @router.post("/api/investigations/start", status_code=status.HTTP_201_CREATED)
 async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
     """Starts an autonomous debugging investigation for a scenario or custom project repository."""
+    idempotency_key = request.get("idempotency_key")
+    if idempotency_key and idempotency_key in IDEMPOTENCY_STORE:
+        _, cached_inv = IDEMPOTENCY_STORE[idempotency_key]
+        cached_copy = cached_inv.model_copy()
+        cached_copy.is_cached = True
+        return cached_copy
+
     scenario_name = request.get("scenario_name") or request.get("service_name")
     if not scenario_name:
         raise HTTPException(
@@ -658,6 +710,7 @@ async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
     elapsed_ms = max(10, int((time.perf_counter() - start_time) * 1000))
 
     inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
+    now_dt = utc_now()
     is_conclusive = result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
     is_insufficient = result.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
     diag_resp = DiagnoseResponse(
@@ -670,6 +723,9 @@ async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
         confidence=result.confidence,
         next_action=result.next_action,
         investigation_id=inv_id,
+        idempotency_key=idempotency_key,
+        is_cached=False,
+        started_at_iso=now_dt.isoformat(),
     )
     INVESTIGATION_DIAGNOSES[inv_id] = diag_resp
     outcome = (
@@ -692,8 +748,13 @@ async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
         duration_ms=elapsed_ms,
         is_sample=False,
         diagnosis=diag_resp,
+        started_at=now_dt,
+        updated_at=now_dt,
+        idempotency_key=idempotency_key,
     )
     INVESTIGATIONS_DB[inv_id] = inv_state
+    if idempotency_key:
+        IDEMPOTENCY_STORE[idempotency_key] = (diag_resp, inv_state)
     return inv_state
 
 

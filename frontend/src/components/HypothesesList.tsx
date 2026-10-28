@@ -13,17 +13,27 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
+import { VerificationReport } from "@/lib/api";
+import { getStatusPanelConfig } from "@/lib/statusConfig";
 
 interface HypothesesListProps {
   diagnosis: DiagnoseResponse;
   onProceedToPatch: () => void;
   canPatch: boolean;
+  runStatus?: string;
+  verificationReport?: VerificationReport | null;
+  durationMs?: number;
+  isCached?: boolean;
 }
 
 export function HypothesesList({
   diagnosis,
   onProceedToPatch,
   canPatch,
+  runStatus,
+  verificationReport,
+  durationMs,
+  isCached,
 }: HypothesesListProps) {
   const [selectedHypothesisIndex, setSelectedHypothesisIndex] = useState<number>(0);
 
@@ -31,37 +41,52 @@ export function HypothesesList({
   const activeHypothesis = hypotheses[selectedHypothesisIndex] || hypotheses[0];
   const confidencePct = Math.round(diagnosis.confidence * 100);
 
-  const isConclusive =
-    diagnosis.status === "diagnosis_available" && diagnosis.confidence >= 0.9;
-  const isInsufficient = diagnosis.status === "insufficient_evidence";
+  const effectiveStatus =
+    runStatus ||
+    (verificationReport?.status === "verified_fixed"
+      ? "verified_fixed"
+      : verificationReport?.status === "verification_failed"
+      ? "verification_failed"
+      : diagnosis.status);
+
+  const panelConfig = getStatusPanelConfig(
+    effectiveStatus,
+    verificationReport,
+    diagnosis.confidence,
+    diagnosis.next_action
+  );
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 shadow-sm backdrop-blur mb-8">
       {/* Header: Diagnosis Status & Confidence Gauge */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800 mb-5">
         <div>
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
             <span
-              className={`rounded-full px-2.5 py-0.5 text-xs font-mono font-bold tracking-wide uppercase border ${
-                isConclusive
-                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-                  : isInsufficient
-                  ? "bg-purple-500/10 text-purple-400 border-purple-500/30"
-                  : "bg-amber-500/10 text-amber-400 border-amber-500/30"
-              }`}
+              className={`rounded-full px-2.5 py-0.5 text-xs font-mono font-bold tracking-wide uppercase border ${panelConfig.badgeClassName}`}
             >
-              {diagnosis.status.replace(/_/g, " ")}
+              {panelConfig.badgeText}
             </span>
             <span className="text-xs text-slate-400 font-mono">
-              Next Action: {diagnosis.next_action}
+              Next Action: {panelConfig.nextActionText}
             </span>
+            {isCached && (
+              <span className="rounded bg-indigo-500/20 border border-indigo-500/40 px-2 py-0.5 text-[10px] font-mono text-indigo-300 font-semibold">
+                Cached result
+              </span>
+            )}
+            {typeof durationMs === "number" && durationMs > 0 && (
+              <span className="rounded bg-slate-800 border border-slate-700 px-2 py-0.5 text-[10px] font-mono text-slate-400">
+                Total: {durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(2)}s`}
+              </span>
+            )}
           </div>
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
             <Lightbulb className="h-5 w-5 text-amber-400" />
-            Root-Cause Hypotheses & Confidence Calibration
+            {panelConfig.headline}
           </h3>
           <p className="text-xs text-slate-300 mt-0.5">
-            {diagnosis.summary}
+            {panelConfig.detailMessage || diagnosis.summary}
           </p>
         </div>
 
@@ -84,7 +109,7 @@ export function HypothesesList({
                 {confidencePct}%
               </span>
               <span className="text-xs text-slate-400 font-normal">
-                {isConclusive ? "(Conclusive)" : "(High Uncertainty)"}
+                {panelConfig.isConclusive ? "(Conclusive)" : "(High Uncertainty)"}
               </span>
             </div>
           </div>
@@ -307,7 +332,14 @@ export function HypothesesList({
           {/* Bottom Action Bar */}
           <div className="pt-5 mt-6 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-xs text-slate-400 font-mono">
-              {isConclusive ? (
+              {panelConfig.isVerified ? (
+                <>
+                  <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                  <span className="text-emerald-300 font-semibold">
+                    Verified fixed in sandbox. Ready for production review.
+                  </span>
+                </>
+              ) : panelConfig.isConclusive ? (
                 <>
                   <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
                   <span>Conclusive evidence threshold (&gt;= 90%) met. Ready for minimal patch proposal.</span>
@@ -320,10 +352,18 @@ export function HypothesesList({
               )}
             </div>
 
-            {canPatch ? (
+            {panelConfig.isVerified ? (
               <button
                 onClick={onProceedToPatch}
                 className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-md shadow-emerald-950/40 hover:from-emerald-400 hover:to-teal-500 transition-all cursor-pointer font-mono shrink-0"
+              >
+                <span>Review & Apply Patch</span>
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            ) : canPatch ? (
+              <button
+                onClick={onProceedToPatch}
+                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-md shadow-cyan-950/40 hover:from-cyan-400 hover:to-indigo-500 transition-all cursor-pointer font-mono shrink-0"
               >
                 <span>Review Patch & Verify in Sandbox</span>
                 <ArrowRight className="h-4 w-4" />

@@ -173,6 +173,9 @@ class InvestigationState(BaseModel):
     verification_report: Optional[Any] = None
     started_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+    idempotency_key: Optional[str] = None
+    is_cached: bool = False
+    original_duration_ms: Optional[int] = None
 
 
 # Request & Response Contracts for REST API
@@ -181,6 +184,7 @@ class StartInvestigationRequest(BaseModel):
     scenario_name: Optional[str] = Field(default=None, description="Preset scenario name, or custom repo path")
     custom_repo_path: Optional[str] = Field(default=None)
     max_iterations: int = Field(default=5, ge=1, le=10)
+    idempotency_key: Optional[str] = Field(default=None, description="Client idempotency key to prevent duplicate runs")
 
 
 class HumanApprovalRequest(BaseModel):
@@ -281,6 +285,10 @@ class DiagnoseResponse(BaseModel):
     uncertainty: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Estimated diagnostic uncertainty (entropy/margin)")
     contradictions: List[ContradictionReport] = Field(default_factory=list, description="Contradictions detected across evidence")
     investigation_id: Optional[str] = Field(default=None, description="Assigned investigation identifier if recorded")
+    idempotency_key: Optional[str] = Field(default=None, description="Idempotency key for request deduplication")
+    is_cached: bool = Field(default=False, description="True if response was served from cache")
+    original_duration_ms: Optional[int] = Field(default=None, description="Original execution duration if served from cache")
+    started_at_iso: Optional[str] = Field(default=None, description="Server creation ISO timestamp")
 
 
 class DiagnoseRequest(BaseModel):
@@ -291,6 +299,7 @@ class DiagnoseRequest(BaseModel):
     configuration_files: Optional[Dict[str, str]] = Field(default=None, description="Key-value mapping of filenames to file content")
     environment_variables: Optional[Dict[str, str]] = Field(default=None, description="Sanitized environment variables")
     model: Optional[str] = Field(default=None, description="Optional override for Nebius model ID")
+    idempotency_key: Optional[str] = Field(default=None, description="Client idempotency key to prevent duplicate runs")
 
 
 class VerifyPatchRequest(BaseModel):

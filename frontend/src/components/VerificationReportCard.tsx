@@ -25,6 +25,8 @@ interface VerificationReportCardProps {
   scenarioName: string;
   onRetry: () => void;
   isVerifying: boolean;
+  totalDurationMs?: number;
+  isCached?: boolean;
 }
 
 export function VerificationReportCard({
@@ -32,6 +34,8 @@ export function VerificationReportCard({
   scenarioName,
   onRetry,
   isVerifying,
+  totalDurationMs,
+  isCached,
 }: VerificationReportCardProps) {
   const [copiedLog, setCopiedLog] = useState<boolean>(false);
   const [copiedDiff, setCopiedDiff] = useState<boolean>(false);
@@ -127,8 +131,18 @@ ${report.patch_diff || "No diff content"}
             <span className="text-xs font-mono text-slate-400 bg-black/50 px-2.5 py-1 rounded border border-slate-800">
               Attempts: {report.attempts} / 2 (Max 1 Retry)
             </span>
-            <span className="text-xs font-mono text-slate-400 bg-black/50 px-2.5 py-1 rounded border border-slate-800">
-              Duration: {formatDuration(report.duration_ms)}
+            <span className="text-xs font-mono text-slate-300 bg-black/50 px-2.5 py-1 rounded border border-slate-800 flex items-center gap-1.5">
+              <span>Duration: {formatDuration(totalDurationMs || report.duration_ms)}</span>
+              {isCached && (
+                <span className="rounded bg-indigo-500/20 border border-indigo-500/40 px-1.5 py-0.2 text-[9px] font-mono text-indigo-300 font-semibold">
+                  Cached result
+                </span>
+              )}
+              {totalDurationMs && report.duration_ms && totalDurationMs !== report.duration_ms ? (
+                <span className="text-slate-500 text-[10px]">
+                  (Sandbox step: {formatDuration(report.duration_ms)})
+                </span>
+              ) : null}
             </span>
           </div>
 
