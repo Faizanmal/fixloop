@@ -4,10 +4,46 @@
  * Grounded in empirical test outputs and verified sandbox executions.
  */
 
-export const API_BASE_URL =
-  (typeof process.env.NEXT_PUBLIC_API_BASE_URL === "string"
-    ? process.env.NEXT_PUBLIC_API_BASE_URL
-    : process.env.NEXT_PUBLIC_API_URL) ?? "http://127.0.0.1:8000";
+/**
+ * Resolves the effective API base URL.
+ * - In production (HTTPS page): Calling an unencrypted http:// address directly from
+ *   the browser is blocked by browsers as "Mixed Content". When on HTTPS without an explicit
+ *   https:// backend, we return "" (relative root) so requests route through Next.js / Vercel
+ *   server-side rewrites.
+ * - In local development (HTTP page) or SSR: uses configured env or defaults to local FastAPI.
+ */
+export function getApiBaseUrl(): string {
+  const envUrl =
+    (typeof process.env.NEXT_PUBLIC_API_BASE_URL === "string"
+      ? process.env.NEXT_PUBLIC_API_BASE_URL
+      : process.env.NEXT_PUBLIC_API_URL) || "";
+
+  if (typeof window !== "undefined") {
+    // Client-side execution in the browser
+    if (window.location.protocol === "https:") {
+      if (envUrl.startsWith("https://")) {
+        return envUrl.replace(/\/+$/, "");
+      }
+      // If backend URL is http:// or empty, use same-origin relative path
+      // Next.js rewrites proxy this server-side without mixed content
+      return "";
+    }
+    // Browser is on http:// (e.g. localhost:3000)
+    if (envUrl) {
+      return envUrl.replace(/\/+$/, "");
+    }
+    return "http://127.0.0.1:8000";
+  }
+
+  // Server-side execution (SSR / Node.js)
+  return (
+    process.env.BACKEND_API_URL ||
+    envUrl ||
+    "http://127.0.0.1:8000"
+  ).replace(/\/+$/, "");
+}
+
+export const API_BASE_URL = getApiBaseUrl();
 
 export interface ScenarioInfo {
   id: string;
@@ -163,10 +199,19 @@ export const STATIC_SCENARIOS: ScenarioInfo[] = [
 ];
 
 class FixLoopApiClient {
-  private baseUrl: string;
+  private explicitBaseUrl?: string;
 
-  constructor(baseUrl: string = API_BASE_URL) {
-    this.baseUrl = baseUrl.replace(/\/+$/, "");
+  constructor(baseUrl?: string) {
+    if (baseUrl !== undefined) {
+      this.explicitBaseUrl = baseUrl.replace(/\/+$/, "");
+    }
+  }
+
+  private get baseUrl(): string {
+    if (this.explicitBaseUrl !== undefined) {
+      return this.explicitBaseUrl;
+    }
+    return getApiBaseUrl();
   }
 
   async checkReadiness(): Promise<SystemReadiness> {
@@ -225,7 +270,7 @@ class FixLoopApiClient {
           reason: err instanceof Error ? err.message : "Backend unreachable",
         },
         issues: [
-          `Cannot connect to FixLoop backend at ${this.baseUrl}. Ensure uvicorn backend is running.`,
+          `Cannot connect to FixLoop backend at ${this.baseUrl || "same-origin API rewrite"}. Ensure uvicorn backend is running.`,
         ],
       };
     }

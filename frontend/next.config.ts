@@ -19,8 +19,8 @@ const nextConfig: NextConfig = {
     },
   },
   async rewrites() {
-    // If backend is a remote host, configure rewrites so Vercel can proxy
-    // requests server-side, preventing browser Mixed-Content (HTTPS->HTTP) blocking
+    // If backend is configured, proxy requests server-side through Next.js / Vercel
+    // to prevent browser Mixed-Content (HTTPS frontend -> HTTP backend) blocking and CORS issues.
     if (backendUrl && /^https?:\/\//i.test(backendUrl)) {
       const cleanBackend = backendUrl.replace(/\/+$/, "");
       return [
@@ -37,8 +37,16 @@ const nextConfig: NextConfig = {
           destination: `${cleanBackend}/scenarios`,
         },
         {
-          source: "/api/v1/:path*",
-          destination: `${cleanBackend}/api/v1/:path*`,
+          source: "/investigations",
+          destination: `${cleanBackend}/investigations`,
+        },
+        {
+          source: "/investigations/:path*",
+          destination: `${cleanBackend}/investigations/:path*`,
+        },
+        {
+          source: "/api/:path*",
+          destination: `${cleanBackend}/api/:path*`,
         },
       ];
     }
