@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { ScenarioInfo } from "@/lib/api";
 import {
   FileWarning,
@@ -12,6 +12,7 @@ import {
   ArrowRight,
   UploadCloud,
   Sparkles,
+  Loader2,
 } from "lucide-react";
 
 interface ScenarioSelectorProps {
@@ -34,6 +35,20 @@ export function ScenarioSelector({
   const [activeTab, setActiveTab] = useState<"scenarios" | "custom">("scenarios");
   const [customServiceName, setCustomServiceName] = useState<string>("auth-service");
   const [customLogs, setCustomLogs] = useState<string>("");
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
+
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (isInvestigating) {
+      setElapsedSeconds(0);
+      timer = setInterval(() => {
+        setElapsedSeconds((prev) => prev + 1);
+      }, 1000);
+    } else {
+      setElapsedSeconds(0);
+    }
+    return () => clearInterval(timer);
+  }, [isInvestigating]);
 
   const getScenarioIcon = (id: string) => {
     if (id.includes("scenario_a")) return FileWarning;
@@ -233,7 +248,36 @@ export function ScenarioSelector({
               />
             </div>
 
-            <div className="flex items-center justify-between pt-2">
+            {isInvestigating && (
+              <div className="rounded-lg border border-cyan-500/40 bg-cyan-950/30 p-3.5 text-xs font-mono backdrop-blur animate-in fade-in">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="flex items-center gap-2 font-semibold text-cyan-300">
+                    <Loader2 className="h-4 w-4 animate-spin text-cyan-400" />
+                    {elapsedSeconds < 3
+                      ? "1/3 Sanitizing & ingesting container logs..."
+                      : elapsedSeconds < 25
+                      ? "2/3 Querying Nebius Token Factory (NVIDIA Nemotron)..."
+                      : "3/3 Calibrating hypothesis confidence & evidence ranking..."}
+                  </span>
+                  <span className="text-slate-400 font-bold text-[11px]">
+                    Elapsed: {elapsedSeconds}s
+                  </span>
+                </div>
+                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className="bg-gradient-to-r from-cyan-500 to-indigo-500 h-1.5 rounded-full transition-all duration-500"
+                    style={{
+                      width: `${Math.min(95, Math.max(10, elapsedSeconds * 2.5))}%`,
+                    }}
+                  />
+                </div>
+                <p className="text-[11px] text-slate-400 mt-2">
+                  Deep LLM inference via Nebius typically takes 20–45s for container trace analysis. Engine will automatically timeout if VM does not respond within 120s.
+                </p>
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
               <span className="text-xs font-mono text-slate-400">
                 Secrets, API keys, and authorization headers are automatically masked by the ingestion engine.
               </span>
@@ -242,8 +286,17 @@ export function ScenarioSelector({
                 disabled={isInvestigating || !customLogs.trim()}
                 className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-5 py-2 text-xs font-semibold text-white shadow-md shadow-cyan-950/40 hover:from-cyan-400 hover:to-indigo-500 disabled:opacity-50 transition-all cursor-pointer font-mono"
               >
-                <UploadCloud className="h-4 w-4" />
-                <span>Diagnose Uploaded Logs</span>
+                {isInvestigating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin text-cyan-200" />
+                    <span>Diagnosing with Nebius ({elapsedSeconds}s)...</span>
+                  </>
+                ) : (
+                  <>
+                    <UploadCloud className="h-4 w-4" />
+                    <span>Diagnose Uploaded Logs</span>
+                  </>
+                )}
               </button>
             </div>
           </form>

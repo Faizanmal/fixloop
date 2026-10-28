@@ -326,33 +326,48 @@ class FixLoopApiClient {
       ? { service_name: scenarioName, logs: customLogs }
       : { service_name: scenarioName };
 
-    const res = await fetch(`${this.baseUrl}/api/v1/diagnose`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000);
 
-    if (!res.ok) {
-      const errorBody = await res.text();
-      let errorMsg = `Diagnosis failed with HTTP ${res.status}`;
-      try {
-        const parsed = JSON.parse(errorBody);
-        if (parsed.detail) {
-          errorMsg =
-            typeof parsed.detail === "string"
-              ? parsed.detail
-              : JSON.stringify(parsed.detail);
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/diagnose`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errorBody = await res.text();
+        let errorMsg = `Diagnosis failed with HTTP ${res.status}`;
+        try {
+          const parsed = JSON.parse(errorBody);
+          if (parsed.detail) {
+            errorMsg =
+              typeof parsed.detail === "string"
+                ? parsed.detail
+                : JSON.stringify(parsed.detail);
+          }
+        } catch {
+          if (errorBody) errorMsg = errorBody;
         }
-      } catch {
-        if (errorBody) errorMsg = errorBody;
+        throw new Error(errorMsg);
       }
-      throw new Error(errorMsg);
-    }
 
-    return await res.json();
+      return await res.json();
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error(
+          "Diagnosis timed out after 120 seconds. Nebius Token Factory inference or VM response took longer than expected. Please try again."
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async fetchPatchProposal(scenarioName: string): Promise<PatchProposal | null> {
@@ -367,6 +382,27 @@ class FixLoopApiClient {
       }
     } catch {
       // If patch cannot be generated due to insufficient evidence, returns null
+    }
+    return null;
+  }
+
+  async fetchInvestigationDiagnosis(
+    id: string
+  ): Promise<DiagnoseResponse | null> {
+    try {
+      const res = await fetch(
+        `${this.baseUrl}/investigations/${encodeURIComponent(id)}/diagnosis`,
+        {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+        }
+      );
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // Fallback
     }
     return null;
   }
@@ -483,7 +519,10 @@ class FixLoopApiClient {
 
             const isSample =
               Boolean(item.is_sample) ||
-              /^inv-000[1-7]$/i.test((item.id as string) || "");
+              Boolean(
+                typeof item.id === "string" &&
+                  item.id.toUpperCase().startsWith("SAMPLE-")
+              );
 
             return {
               id: (item.id as string) || `INV-${idx + 1}`,

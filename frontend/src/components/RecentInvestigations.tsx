@@ -1,19 +1,23 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { getStatusColor, formatDuration } from "@/lib/utils";
-import { History, ArrowUpRight } from "lucide-react";
+import { History, ArrowUpRight, ArrowUpDown, Eye } from "lucide-react";
 import { InvestigationHistoryItem } from "@/lib/api";
 
 interface RecentInvestigationsProps {
   history: InvestigationHistoryItem[];
   onSelectHistoryItem: (item: InvestigationHistoryItem) => void;
+  activeInspectId?: string | null;
 }
 
 export function RecentInvestigations({
   history,
   onSelectHistoryItem,
+  activeInspectId,
 }: RecentInvestigationsProps) {
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+
   if (history.length === 0) {
     return (
       <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-6 text-center backdrop-blur mb-8">
@@ -28,9 +32,18 @@ export function RecentInvestigations({
     );
   }
 
+  // Sort history: "asc" puts older runs above newer runs (chronological order)
+  const sortedHistory = [...history].sort((a, b) => {
+    if (sortOrder === "asc") {
+      return a.id.localeCompare(b.id, undefined, { numeric: true });
+    } else {
+      return b.id.localeCompare(a.id, undefined, { numeric: true });
+    }
+  });
+
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 shadow-sm backdrop-blur mb-8">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="rounded-full bg-cyan-500/10 border border-cyan-500/30 px-2 py-0.5 text-[10px] font-mono font-bold text-cyan-400">
@@ -42,9 +55,19 @@ export function RecentInvestigations({
             Recent Diagnostic Investigations & Verification Runs
           </h3>
         </div>
-        <span className="text-xs text-slate-400 font-mono">
-          {history.length} logged run(s)
-        </span>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setSortOrder(prev => (prev === "asc" ? "desc" : "asc"))}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1 text-[11px] font-mono text-slate-300 hover:text-white hover:border-slate-600 transition-colors cursor-pointer"
+            title="Toggle chronological vs reverse ordering"
+          >
+            <ArrowUpDown className="h-3 w-3 text-cyan-400" />
+            <span>Order: {sortOrder === "asc" ? "Oldest First (1→N)" : "Newest First (N→1)"}</span>
+          </button>
+          <span className="text-xs text-slate-400 font-mono">
+            {history.length} logged run(s)
+          </span>
+        </div>
       </div>
 
       <div className="overflow-x-auto">
@@ -61,17 +84,26 @@ export function RecentInvestigations({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/60 font-mono">
-            {history.map((item) => {
+            {sortedHistory.map((item) => {
               const statusStyles = getStatusColor(item.status);
+              const isInspecting = item.id === activeInspectId;
               return (
                 <tr
                   key={item.id}
-                  className="hover:bg-slate-800/30 transition-colors group cursor-pointer"
+                  className={`hover:bg-slate-800/30 transition-colors group cursor-pointer ${
+                    isInspecting ? "bg-cyan-950/30 border-l-2 border-l-cyan-400" : ""
+                  }`}
                   onClick={() => onSelectHistoryItem(item)}
                 >
                   <td className="py-3 text-cyan-300 font-bold">
                     <div className="flex items-center gap-1.5">
                       <span>{item.id}</span>
+                      {isInspecting && (
+                        <span className="rounded bg-cyan-500/20 border border-cyan-500/40 px-1.5 py-0.5 text-[9px] font-mono text-cyan-300 font-semibold flex items-center gap-1">
+                          <Eye className="h-2.5 w-2.5" />
+                          Viewing
+                        </span>
+                      )}
                       {item.isSample && (
                         <span className="rounded bg-slate-800 border border-slate-700 px-1.5 py-0.5 text-[9px] font-mono text-slate-400 font-normal">
                           Sample
@@ -107,9 +139,13 @@ export function RecentInvestigations({
                         e.stopPropagation();
                         onSelectHistoryItem(item);
                       }}
-                      className="inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300 font-medium cursor-pointer group-hover:underline"
+                      className={`inline-flex items-center gap-1 font-medium cursor-pointer group-hover:underline ${
+                        isInspecting
+                          ? "text-cyan-300 font-bold"
+                          : "text-cyan-400 hover:text-cyan-300"
+                      }`}
                     >
-                      <span>Inspect</span>
+                      <span>{isInspecting ? "Inspecting" : "Inspect"}</span>
                       <ArrowUpRight className="h-3 w-3" />
                     </button>
                   </td>
