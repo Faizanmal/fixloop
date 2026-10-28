@@ -100,7 +100,13 @@ export function ScenarioSelector({
         <div className="flex items-center gap-3">
           <div className="inline-flex rounded-lg bg-black/40 p-1 border border-slate-800 text-xs font-mono">
             <button
-              onClick={() => setActiveTab("scenarios")}
+              onClick={() => {
+                setActiveTab("scenarios");
+                const isPreset = scenarios.some((s) => s.id === selectedScenario);
+                if (!isPreset && scenarios.length > 0) {
+                  onSelectScenario(scenarios[0].id);
+                }
+              }}
               className={`px-3 py-1.5 rounded-md transition-all cursor-pointer ${
                 activeTab === "scenarios"
                   ? "bg-slate-800 text-white shadow-sm"
@@ -123,8 +129,14 @@ export function ScenarioSelector({
 
           {activeTab === "scenarios" && (
             <button
-              onClick={onStartInvestigation}
-              disabled={isInvestigating || !selectedScenario}
+              onClick={() => {
+                const isPreset = scenarios.some((s) => s.id === selectedScenario);
+                if (!isPreset && scenarios.length > 0) {
+                  onSelectScenario(scenarios[0].id);
+                }
+                onStartInvestigation();
+              }}
+              disabled={isInvestigating || (!selectedScenario && scenarios.length === 0)}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-5 py-2 text-xs font-semibold text-white shadow-lg shadow-cyan-950/50 hover:from-cyan-400 hover:to-indigo-500 disabled:opacity-50 transition-all cursor-pointer font-mono select-none"
             >
               {isInvestigating ? (

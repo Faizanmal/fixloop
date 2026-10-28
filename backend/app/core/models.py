@@ -135,6 +135,7 @@ class InvestigationOutcome(str, Enum):
     FAILED_FIX = "FAILED_FIX"
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
     HUMAN_INTERVENTION_REQUIRED = "HUMAN_INTERVENTION_REQUIRED"
+    DIAGNOSIS_AVAILABLE = "DIAGNOSIS_AVAILABLE"
 
 
 class InvestigationStatus(str, Enum):
@@ -167,6 +168,9 @@ class InvestigationState(BaseModel):
     confidence: Optional[float] = None
     duration_ms: Optional[int] = None
     is_sample: bool = False
+    diagnosis: Optional[Any] = None
+    patch_proposal: Optional[Any] = None
+    verification_report: Optional[Any] = None
     started_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -293,5 +297,6 @@ class VerifyPatchRequest(BaseModel):
     """Request payload for /api/v1/verify."""
     scenario_name: str = Field(..., description="Target scenario identifier (e.g. scenario_a_missing_env)")
     user_approved: bool = Field(default=True, description="Human approval flag for high-risk operations")
+    investigation_id: Optional[str] = Field(default=None, description="Optional investigation ID to update upon verification")
 
 

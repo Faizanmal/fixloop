@@ -9,14 +9,16 @@ interface RecentInvestigationsProps {
   history: InvestigationHistoryItem[];
   onSelectHistoryItem: (item: InvestigationHistoryItem) => void;
   activeInspectId?: string | null;
+  isLoadingInspect?: boolean;
 }
 
 export function RecentInvestigations({
   history,
   onSelectHistoryItem,
   activeInspectId,
+  isLoadingInspect,
 }: RecentInvestigationsProps) {
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
   if (history.length === 0) {
     return (
@@ -32,12 +34,12 @@ export function RecentInvestigations({
     );
   }
 
-  // Sort history: "asc" puts older runs above newer runs (chronological order)
+  // Sort history: "desc" puts newer runs first (N→1), "asc" puts older runs first (1→N)
   const sortedHistory = [...history].sort((a, b) => {
-    if (sortOrder === "asc") {
-      return a.id.localeCompare(b.id, undefined, { numeric: true });
-    } else {
+    if (sortOrder === "desc") {
       return b.id.localeCompare(a.id, undefined, { numeric: true });
+    } else {
+      return a.id.localeCompare(b.id, undefined, { numeric: true });
     }
   });
 
@@ -57,15 +59,15 @@ export function RecentInvestigations({
         </div>
         <div className="flex items-center gap-3">
           <button
-            onClick={() => setSortOrder(prev => (prev === "asc" ? "desc" : "asc"))}
+            onClick={() => setSortOrder(prev => (prev === "desc" ? "asc" : "desc"))}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1 text-[11px] font-mono text-slate-300 hover:text-white hover:border-slate-600 transition-colors cursor-pointer"
             title="Toggle chronological vs reverse ordering"
           >
             <ArrowUpDown className="h-3 w-3 text-cyan-400" />
-            <span>Order: {sortOrder === "asc" ? "Oldest First (1→N)" : "Newest First (N→1)"}</span>
+            <span>Order: {sortOrder === "desc" ? "Newest First (N→1)" : "Oldest First (1→N)"}</span>
           </button>
           <span className="text-xs text-slate-400 font-mono">
-            {history.length} logged run(s)
+            {sortedHistory.length} logged run(s)
           </span>
         </div>
       </div>
@@ -100,8 +102,17 @@ export function RecentInvestigations({
                       <span>{item.id}</span>
                       {isInspecting && (
                         <span className="rounded bg-cyan-500/20 border border-cyan-500/40 px-1.5 py-0.5 text-[9px] font-mono text-cyan-300 font-semibold flex items-center gap-1">
-                          <Eye className="h-2.5 w-2.5" />
-                          Viewing
+                          {isLoadingInspect ? (
+                            <>
+                              <div className="h-2 w-2 animate-spin rounded-full border border-cyan-300 border-t-transparent" />
+                              Loading run…
+                            </>
+                          ) : (
+                            <>
+                              <Eye className="h-2.5 w-2.5" />
+                              Viewing
+                            </>
+                          )}
                         </span>
                       )}
                       {item.isSample && (
@@ -145,7 +156,7 @@ export function RecentInvestigations({
                           : "text-cyan-400 hover:text-cyan-300"
                       }`}
                     >
-                      <span>{isInspecting ? "Inspecting" : "Inspect"}</span>
+                      <span>{isInspecting ? (isLoadingInspect ? "Loading…" : "Inspecting") : "Inspect"}</span>
                       <ArrowUpRight className="h-3 w-3" />
                     </button>
                   </td>

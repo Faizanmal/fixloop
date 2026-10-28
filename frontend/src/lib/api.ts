@@ -162,6 +162,9 @@ export interface InvestigationHistoryItem {
   durationMs: number;
   timestamp: string;
   isSample?: boolean;
+  diagnosis?: DiagnoseResponse | null;
+  patchProposal?: PatchProposal | null;
+  verificationReport?: VerificationReport | null;
 }
 
 // Fallback scenarios list if backend is loading or offline (7 reproducible benchmark scenarios)
@@ -409,7 +412,8 @@ class FixLoopApiClient {
 
   async runVerification(
     scenarioName: string,
-    userApproved: boolean = true
+    userApproved: boolean = true,
+    investigationId?: string
   ): Promise<VerificationReport> {
     const res = await fetch(`${this.baseUrl}/api/v1/verify`, {
       method: "POST",
@@ -420,6 +424,7 @@ class FixLoopApiClient {
       body: JSON.stringify({
         scenario_name: scenarioName,
         user_approved: userApproved,
+        ...(investigationId ? { investigation_id: investigationId } : {}),
       }),
     });
 
@@ -476,6 +481,22 @@ class FixLoopApiClient {
     return await res.json();
   }
 
+  async fetchInvestigation(id: string): Promise<Record<string, unknown> | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/investigations/${encodeURIComponent(id)}`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // Backend not yet populated or offline
+    }
+    return null;
+  }
+
   async fetchRecentInvestigations(): Promise<InvestigationHistoryItem[]> {
     try {
       const res = await fetch(`${this.baseUrl}/investigations`, {
@@ -491,15 +512,29 @@ class FixLoopApiClient {
             const outcome = String(item.outcome || "").toUpperCase();
             const rawStatus = String(item.status || "completed").toLowerCase();
 
-            // Scenario D or insufficient evidence MUST show "insufficient_evidence"
+            // Correct mapping of backend final statuses
             let status = rawStatus;
             if (
+              outcome === "VERIFIED_FIX" ||
+              rawStatus === "verified_fixed"
+            ) {
+              status = "verified_fixed";
+            } else if (
+              outcome === "FAILED_FIX" ||
+              rawStatus === "verification_failed"
+            ) {
+              status = "verification_failed";
+            } else if (
               outcome === "INSUFFICIENT_EVIDENCE" ||
               rawStatus === "insufficient_evidence" ||
               scenarioName.includes("scenario_d")
             ) {
               status = "insufficient_evidence";
-            } else if (outcome === "VERIFIED_FIX" || rawStatus === "completed") {
+            } else if (
+              outcome === "DIAGNOSIS_AVAILABLE" ||
+              rawStatus === "diagnosis_available" ||
+              rawStatus === "completed"
+            ) {
               status = "diagnosis_available";
             }
 
@@ -515,7 +550,7 @@ class FixLoopApiClient {
                 ? item.duration_ms
                 : typeof item.durationMs === "number"
                 ? item.durationMs
-                : 45;
+                : 0;
 
             const isSample =
               Boolean(item.is_sample) ||
@@ -534,6 +569,9 @@ class FixLoopApiClient {
                 ? new Date(item.started_at as string).toLocaleTimeString()
                 : new Date().toLocaleTimeString(),
               isSample,
+              diagnosis: (item.diagnosis as DiagnoseResponse) || null,
+              patchProposal: (item.patch_proposal as PatchProposal) || null,
+              verificationReport: (item.verification_report as VerificationReport) || null,
             };
           });
         }

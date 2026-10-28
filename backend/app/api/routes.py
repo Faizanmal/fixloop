@@ -4,6 +4,7 @@ Implements /health, /ready, /api/v1/diagnose, and scenario exploration.
 Guarantees secret safety and actionable error feedback.
 """
 
+import time
 import shutil
 import subprocess
 from pathlib import Path
@@ -13,6 +14,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from backend.app.core.config import settings
 from backend.app.core.models import (
+    utc_now,
     DiagnoseRequest,
     DiagnoseResponse,
     DiagnoseHypothesis,
@@ -216,6 +218,8 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
     Calls Nebius Token Factory with NVIDIA open-source model (or mock engine).
     Validates inputs, handles timeouts/retries, and returns structured diagnosis.
     """
+    start_time = time.perf_counter()
+
     # 1. If service_name maps to a local scenario fixture directory, run DiagnosticEngine
     candidate_dir = get_scenario_dir(request.service_name) if request.service_name else None
     if candidate_dir:
@@ -225,6 +229,7 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             logs_override=request.logs,
             inspect_override=request.docker_inspect,
         )
+        elapsed_ms = max(10, int((time.perf_counter() - start_time) * 1000))
         inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
         is_conclusive = result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
         is_insufficient = result.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
@@ -239,20 +244,29 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             next_action=result.next_action,
             investigation_id=inv_id,
         )
-        INVESTIGATION_DIAGNOSES[inv_id] = diag_resp
-        INVESTIGATIONS_DB[inv_id] = InvestigationState(
+        outcome = (
+            InvestigationOutcome.INSUFFICIENT_EVIDENCE
+            if is_insufficient
+            else (
+                InvestigationOutcome.DIAGNOSIS_AVAILABLE
+                if is_conclusive
+                else InvestigationOutcome.FAILED_FIX
+            )
+        )
+        inv_state = InvestigationState(
             id=inv_id,
             scenario_name=request.service_name or "custom_target",
             project_path=str(candidate_dir),
             status=InvestigationStatus.COMPLETED if (is_conclusive or is_insufficient) else InvestigationStatus.FAILED,
-            outcome=InvestigationOutcome.VERIFIED_FIX if is_conclusive else (
-                InvestigationOutcome.INSUFFICIENT_EVIDENCE if is_insufficient else InvestigationOutcome.FAILED_FIX
-            ),
+            outcome=outcome,
             outcome_summary=result.summary,
             confidence=result.confidence,
-            duration_ms=45,
+            duration_ms=elapsed_ms,
             is_sample=False,
+            diagnosis=diag_resp,
         )
+        INVESTIGATION_DIAGNOSES[inv_id] = diag_resp
+        INVESTIGATIONS_DB[inv_id] = inv_state
         return diag_resp
 
     # 2. Input validation for ad-hoc requests
@@ -271,24 +285,34 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
     client = NebiusLLMClient()
     try:
         diagnosis = await client.diagnose(request)
+        elapsed_ms = max(10, int((time.perf_counter() - start_time) * 1000))
         inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
         is_conclusive = diagnosis.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
         is_insufficient = diagnosis.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
         diagnosis.investigation_id = inv_id
-        INVESTIGATION_DIAGNOSES[inv_id] = diagnosis
-        INVESTIGATIONS_DB[inv_id] = InvestigationState(
+        outcome = (
+            InvestigationOutcome.INSUFFICIENT_EVIDENCE
+            if is_insufficient
+            else (
+                InvestigationOutcome.DIAGNOSIS_AVAILABLE
+                if is_conclusive
+                else InvestigationOutcome.FAILED_FIX
+            )
+        )
+        inv_state = InvestigationState(
             id=inv_id,
             scenario_name=request.service_name or "custom_target",
             project_path="custom_input",
             status=InvestigationStatus.COMPLETED if (is_conclusive or is_insufficient) else InvestigationStatus.FAILED,
-            outcome=InvestigationOutcome.VERIFIED_FIX if is_conclusive else (
-                InvestigationOutcome.INSUFFICIENT_EVIDENCE if is_insufficient else InvestigationOutcome.FAILED_FIX
-            ),
+            outcome=outcome,
             outcome_summary=diagnosis.summary,
             confidence=diagnosis.confidence,
-            duration_ms=45,
+            duration_ms=elapsed_ms,
             is_sample=False,
+            diagnosis=diagnosis,
         )
+        INVESTIGATION_DIAGNOSES[inv_id] = diagnosis
+        INVESTIGATIONS_DB[inv_id] = inv_state
         return diagnosis
     except NebiusAuthenticationError as exc:
         raise HTTPException(
@@ -340,6 +364,30 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
 @router.post("/api/v1/verify", response_model=VerificationReport)
 async def verify_patch(request: VerifyPatchRequest) -> VerificationReport:
     """Proposes a minimal patch, tests it in an isolated disposable sandbox, and reports actual verification status."""
+    verify_start = time.perf_counter()
+
+    def update_matching_investigation(rep: VerificationReport, duration_delta_ms: int):
+        target_inv: Optional[InvestigationState] = None
+        if request.investigation_id and request.investigation_id in INVESTIGATIONS_DB:
+            target_inv = INVESTIGATIONS_DB[request.investigation_id]
+        else:
+            for inv in reversed(list(INVESTIGATIONS_DB.values())):
+                if inv.scenario_name == request.scenario_name or inv.id == request.scenario_name:
+                    target_inv = inv
+                    break
+        if target_inv:
+            if rep.status == VerificationStatus.VERIFIED_FIXED:
+                target_inv.status = InvestigationStatus.COMPLETED
+                target_inv.outcome = InvestigationOutcome.VERIFIED_FIX
+            elif rep.status == VerificationStatus.PATCH_REJECTED:
+                target_inv.outcome = InvestigationOutcome.HUMAN_INTERVENTION_REQUIRED
+            elif rep.status == VerificationStatus.VERIFICATION_FAILED:
+                target_inv.status = InvestigationStatus.FAILED
+                target_inv.outcome = InvestigationOutcome.FAILED_FIX
+            target_inv.duration_ms = (target_inv.duration_ms or 0) + duration_delta_ms
+            target_inv.verification_report = rep
+            target_inv.updated_at = utc_now()
+
     scenario_dir = get_scenario_dir(request.scenario_name)
     if not scenario_dir:
         # Check if matching investigation or diagnosis exists for this service or ad-hoc target
@@ -362,14 +410,17 @@ async def verify_patch(request: VerifyPatchRequest) -> VerificationReport:
                 else "--- a/docker-compose.yml\n+++ b/docker-compose.yml\n@@ -8,2 +8,2 @@\n     ports:\n-      - \"8000:5000\"\n+      - \"8000:8000\"\n"
             )
         )
-        return VerificationReport(
+        verify_elapsed = max(20, int((time.perf_counter() - verify_start) * 1000))
+        report = VerificationReport(
             status=VerificationStatus.VERIFIED_FIXED,
             test_output=f"All verification criteria satisfied for {request.scenario_name}. Container environment passed readiness checks.",
             expected_criteria="Isolated sandbox container returns exit code 0 and health probe passes.",
             patch_diff=diff,
-            duration_ms=120,
+            duration_ms=verify_elapsed,
             reverted=True,
         )
+        update_matching_investigation(report, verify_elapsed)
+        return report
 
     # 1. Run diagnostic investigation
     engine = DiagnosticEngine()
@@ -377,12 +428,16 @@ async def verify_patch(request: VerifyPatchRequest) -> VerificationReport:
 
     # 2. Check sufficient evidence
     if diag_result.status != DiagnosisStatus.DIAGNOSIS_AVAILABLE or not diag_result.hypotheses or diag_result.confidence < 0.90:
-        return VerificationReport(
+        verify_elapsed = max(10, int((time.perf_counter() - verify_start) * 1000))
+        report = VerificationReport(
             status=VerificationStatus.NOT_ATTEMPTED,
             test_output=f"Verification not attempted: diagnosis status is '{diag_result.status.value}' with confidence {diag_result.confidence:.2f} (>= 0.90 required).",
             expected_criteria="Conclusive empirical evidence (confidence >= 0.90)",
+            duration_ms=verify_elapsed,
             reverted=True,
         )
+        update_matching_investigation(report, verify_elapsed)
+        return report
 
     # 3. Execute sandboxed verification pipeline
     report = await ControlledVerificationPipeline.verify_hypothesis_fix(
@@ -391,20 +446,10 @@ async def verify_patch(request: VerifyPatchRequest) -> VerificationReport:
         hypothesis=diag_result.hypotheses[0],
         user_approved=request.user_approved,
     )
-
-    # 4. Update latest matching investigation outcome
-    for inv in reversed(list(INVESTIGATIONS_DB.values())):
-        if inv.scenario_name == request.scenario_name:
-            if report.status == VerificationStatus.VERIFIED_FIXED:
-                inv.status = InvestigationStatus.COMPLETED
-                inv.outcome = InvestigationOutcome.VERIFIED_FIX
-            elif report.status == VerificationStatus.PATCH_REJECTED:
-                inv.outcome = InvestigationOutcome.HUMAN_INTERVENTION_REQUIRED
-            elif report.status == VerificationStatus.VERIFICATION_FAILED:
-                inv.status = InvestigationStatus.FAILED
-                inv.outcome = InvestigationOutcome.FAILED_FIX
-            break
-
+    verify_elapsed = max(10, int((time.perf_counter() - verify_start) * 1000))
+    if report.duration_ms <= 0:
+        report.duration_ms = verify_elapsed
+    update_matching_investigation(report, report.duration_ms)
     return report
 
 
@@ -607,26 +652,15 @@ async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
             detail=f"Scenario '{scenario_name}' not found."
         )
 
+    start_time = time.perf_counter()
     engine = DiagnosticEngine()
     result = await engine.run_investigation(project_root=candidate_dir)
+    elapsed_ms = max(10, int((time.perf_counter() - start_time) * 1000))
 
     inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
     is_conclusive = result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
     is_insufficient = result.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
-    inv_state = InvestigationState(
-        id=inv_id,
-        scenario_name=scenario_name,
-        project_path=str(candidate_dir),
-        status=InvestigationStatus.COMPLETED if (is_conclusive or is_insufficient) else InvestigationStatus.FAILED,
-        outcome=InvestigationOutcome.VERIFIED_FIX if is_conclusive else (
-            InvestigationOutcome.INSUFFICIENT_EVIDENCE if is_insufficient else InvestigationOutcome.FAILED_FIX
-        ),
-        outcome_summary=result.summary,
-        confidence=result.confidence,
-        duration_ms=45,
-        is_sample=False,
-    )
-    INVESTIGATION_DIAGNOSES[inv_id] = DiagnoseResponse(
+    diag_resp = DiagnoseResponse(
         status=result.status,
         summary=result.summary,
         hypotheses=result.hypotheses,
@@ -637,16 +671,42 @@ async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
         next_action=result.next_action,
         investigation_id=inv_id,
     )
+    INVESTIGATION_DIAGNOSES[inv_id] = diag_resp
+    outcome = (
+        InvestigationOutcome.INSUFFICIENT_EVIDENCE
+        if is_insufficient
+        else (
+            InvestigationOutcome.DIAGNOSIS_AVAILABLE
+            if is_conclusive
+            else InvestigationOutcome.FAILED_FIX
+        )
+    )
+    inv_state = InvestigationState(
+        id=inv_id,
+        scenario_name=scenario_name,
+        project_path=str(candidate_dir),
+        status=InvestigationStatus.COMPLETED if (is_conclusive or is_insufficient) else InvestigationStatus.FAILED,
+        outcome=outcome,
+        outcome_summary=result.summary,
+        confidence=result.confidence,
+        duration_ms=elapsed_ms,
+        is_sample=False,
+        diagnosis=diag_resp,
+    )
     INVESTIGATIONS_DB[inv_id] = inv_state
     return inv_state
 
 
 @router.get("/investigations/{investigation_id}")
+@router.get("/api/v1/investigations/{investigation_id}")
 async def get_investigation(investigation_id: str) -> InvestigationState:
     """Retrieve state of an investigation run."""
-    if investigation_id not in INVESTIGATIONS_DB:
-        raise HTTPException(status_code=404, detail="Investigation not found")
-    return INVESTIGATIONS_DB[investigation_id]
+    if investigation_id in INVESTIGATIONS_DB:
+        return INVESTIGATIONS_DB[investigation_id]
+    for inv in reversed(list(INVESTIGATIONS_DB.values())):
+        if inv.scenario_name == investigation_id or inv.id.lower() == investigation_id.lower():
+            return inv
+    raise HTTPException(status_code=404, detail=f"Investigation '{investigation_id}' not found")
 
 
 @router.get("/investigations/{investigation_id}/diagnosis", response_model=DiagnoseResponse)
