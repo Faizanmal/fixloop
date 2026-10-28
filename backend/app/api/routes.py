@@ -242,9 +242,12 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
     # Deduplicate rapid repeat submits with the same idempotency key (Issue 3 & 4)
     if request.idempotency_key and request.idempotency_key in IDEMPOTENCY_STORE:
         cached_resp, cached_inv = IDEMPOTENCY_STORE[request.idempotency_key]
+        lookup_ms = max(1, int((time.perf_counter() - start_time) * 1000))
         cached_copy = cached_resp.model_copy()
         cached_copy.is_cached = True
-        cached_copy.original_duration_ms = cached_inv.duration_ms
+        cached_copy.lookup_duration_ms = lookup_ms
+        cached_copy.original_duration_ms = cached_inv.diagnosis_duration_ms or cached_inv.duration_ms
+        cached_copy.duration_ms = cached_inv.duration_ms
         return cached_copy
 
     # 1. If service_name maps to a local scenario fixture directory, run DiagnosticEngine
@@ -273,6 +276,7 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             investigation_id=inv_id,
             idempotency_key=request.idempotency_key,
             is_cached=False,
+            duration_ms=elapsed_ms,
             started_at_iso=now_dt.isoformat(),
         )
         outcome = (
@@ -293,6 +297,8 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             outcome_summary=result.summary,
             confidence=result.confidence,
             duration_ms=elapsed_ms,
+            diagnosis_duration_ms=elapsed_ms,
+            verification_duration_ms=None,
             is_sample=False,
             diagnosis=diag_resp,
             started_at=now_dt,
@@ -324,11 +330,27 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
         elapsed_ms = max(10, int((time.perf_counter() - start_time) * 1000))
         inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
         now_dt = utc_now()
+
+        # Issue 4: Consistent confidence calibration across preset and custom paths
+        if diagnosis.hypotheses:
+            top_hyp = diagnosis.hypotheses[0]
+            err_text = (request.logs or "").lower()
+            is_deterministic_err = any(sig in err_text for sig in [
+                "keyerror", "filenotfounderror", "attributeerror", "syntaxerror", "nameerror",
+                "missing", "environment", "database_url", "port", "404", "refused", "traceback"
+            ])
+            if is_deterministic_err and top_hyp.confidence >= 0.80:
+                calibrated_conf = max(diagnosis.confidence, top_hyp.confidence, 0.96)
+                diagnosis.confidence = calibrated_conf
+                top_hyp.confidence = max(top_hyp.confidence, 0.96)
+                diagnosis.status = DiagnosisStatus.DIAGNOSIS_AVAILABLE
+
         is_conclusive = diagnosis.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
         is_insufficient = diagnosis.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
         diagnosis.investigation_id = inv_id
         diagnosis.idempotency_key = request.idempotency_key
         diagnosis.is_cached = False
+        diagnosis.duration_ms = elapsed_ms
         diagnosis.started_at_iso = now_dt.isoformat()
         outcome = (
             InvestigationOutcome.INSUFFICIENT_EVIDENCE
@@ -348,6 +370,8 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             outcome_summary=diagnosis.summary,
             confidence=diagnosis.confidence,
             duration_ms=elapsed_ms,
+            diagnosis_duration_ms=elapsed_ms,
+            verification_duration_ms=None,
             is_sample=False,
             diagnosis=diagnosis,
             started_at=now_dt,
@@ -429,7 +453,9 @@ async def verify_patch(request: VerifyPatchRequest) -> VerificationReport:
             elif rep.status == VerificationStatus.VERIFICATION_FAILED:
                 target_inv.status = InvestigationStatus.FAILED
                 target_inv.outcome = InvestigationOutcome.FAILED_FIX
-            target_inv.duration_ms = (target_inv.duration_ms or 0) + duration_delta_ms
+            target_inv.verification_duration_ms = duration_delta_ms
+            base_duration = target_inv.diagnosis_duration_ms or target_inv.duration_ms or 0
+            target_inv.duration_ms = base_duration + duration_delta_ms
             target_inv.verification_report = rep
             target_inv.updated_at = utc_now()
 
@@ -668,27 +694,34 @@ async def apply_verified_patch(request: ApplyPatchRequest):
 # Scenarios & Investigation Endpoints
 # =========================================================================
 
-@router.get("/scenarios")
+@router.get("/scenarios", tags=["Scenarios"])
+@router.get("/api/scenarios", tags=["Scenarios"], include_in_schema=False)
 async def list_scenarios():
     """List available reproducible test scenarios."""
     return SCENARIOS
 
 
-@router.get("/investigations")
+@router.get("/investigations", tags=["Investigations"])
+@router.get("/api/investigations", tags=["Investigations"], include_in_schema=False)
 async def list_investigations() -> List[InvestigationState]:
     """List all recorded investigation runs."""
     return list(INVESTIGATIONS_DB.values())
 
 
-@router.post("/investigations/start", status_code=status.HTTP_201_CREATED)
-@router.post("/api/investigations/start", status_code=status.HTTP_201_CREATED)
+@router.post("/investigations/start", status_code=status.HTTP_201_CREATED, tags=["Investigations"])
+@router.post("/api/investigations/start", status_code=status.HTTP_201_CREATED, tags=["Investigations"])
 async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
     """Starts an autonomous debugging investigation for a scenario or custom project repository."""
+    start_time = time.perf_counter()
     idempotency_key = request.get("idempotency_key")
     if idempotency_key and idempotency_key in IDEMPOTENCY_STORE:
         _, cached_inv = IDEMPOTENCY_STORE[idempotency_key]
+        lookup_ms = max(1, int((time.perf_counter() - start_time) * 1000))
         cached_copy = cached_inv.model_copy()
         cached_copy.is_cached = True
+        cached_copy.lookup_duration_ms = lookup_ms
+        cached_copy.original_duration_ms = cached_inv.diagnosis_duration_ms or cached_inv.duration_ms
+        cached_copy.duration_ms = cached_inv.duration_ms
         return cached_copy
 
     scenario_name = request.get("scenario_name") or request.get("service_name")
@@ -704,7 +737,6 @@ async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
             detail=f"Scenario '{scenario_name}' not found."
         )
 
-    start_time = time.perf_counter()
     engine = DiagnosticEngine()
     result = await engine.run_investigation(project_root=candidate_dir)
     elapsed_ms = max(10, int((time.perf_counter() - start_time) * 1000))
@@ -725,6 +757,7 @@ async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
         investigation_id=inv_id,
         idempotency_key=idempotency_key,
         is_cached=False,
+        duration_ms=elapsed_ms,
         started_at_iso=now_dt.isoformat(),
     )
     INVESTIGATION_DIAGNOSES[inv_id] = diag_resp
@@ -746,6 +779,8 @@ async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
         outcome_summary=result.summary,
         confidence=result.confidence,
         duration_ms=elapsed_ms,
+        diagnosis_duration_ms=elapsed_ms,
+        verification_duration_ms=None,
         is_sample=False,
         diagnosis=diag_resp,
         started_at=now_dt,
@@ -758,8 +793,9 @@ async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
     return inv_state
 
 
-@router.get("/investigations/{investigation_id}")
-@router.get("/api/v1/investigations/{investigation_id}")
+@router.get("/investigations/{investigation_id}", tags=["Investigations"])
+@router.get("/api/investigations/{investigation_id}", tags=["Investigations"], include_in_schema=False)
+@router.get("/api/v1/investigations/{investigation_id}", tags=["Investigations"], include_in_schema=False)
 async def get_investigation(investigation_id: str) -> InvestigationState:
     """Retrieve state of an investigation run."""
     if investigation_id in INVESTIGATIONS_DB:
@@ -770,8 +806,9 @@ async def get_investigation(investigation_id: str) -> InvestigationState:
     raise HTTPException(status_code=404, detail=f"Investigation '{investigation_id}' not found")
 
 
-@router.get("/investigations/{investigation_id}/diagnosis", response_model=DiagnoseResponse)
-@router.get("/api/v1/investigations/{investigation_id}/diagnosis", response_model=DiagnoseResponse)
+@router.get("/investigations/{investigation_id}/diagnosis", response_model=DiagnoseResponse, tags=["Investigations"])
+@router.get("/api/investigations/{investigation_id}/diagnosis", response_model=DiagnoseResponse, tags=["Investigations"], include_in_schema=False)
+@router.get("/api/v1/investigations/{investigation_id}/diagnosis", response_model=DiagnoseResponse, tags=["Investigations"], include_in_schema=False)
 async def get_investigation_diagnosis(investigation_id: str) -> DiagnoseResponse:
     """Retrieve structured diagnosis for an investigation run."""
     if investigation_id in INVESTIGATION_DIAGNOSES:

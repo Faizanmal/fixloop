@@ -27,13 +27,8 @@ else:
 
 app.add_middleware(CORSMiddleware, **cors_kwargs)
 
-# Top-level health and readiness routes (per requirements)
-app.add_api_route("/health", health, methods=["GET"], tags=["System Health"])
-app.add_api_route("/ready", ready, methods=["GET"], tags=["System Readiness"])
-
-# Mount router for /api/v1/diagnose, /scenarios, and aliases
+# Mount router for canonical routes (/health, /ready, /api/v1/diagnose, /scenarios, /investigations)
 app.include_router(api_router)
-app.include_router(api_router, prefix="/api")
 
 
 @app.get("/")

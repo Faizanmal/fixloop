@@ -108,6 +108,8 @@ export interface DiagnoseResponse {
   investigation_id?: string;
   is_cached?: boolean;
   original_duration_ms?: number | null;
+  lookup_duration_ms?: number | null;
+  duration_ms?: number | null;
   started_at_iso?: string | null;
   idempotency_key?: string | null;
 }
@@ -164,6 +166,9 @@ export interface InvestigationHistoryItem {
   status: string;
   confidence: number;
   durationMs: number;
+  diagnosisDurationMs?: number | null;
+  verificationDurationMs?: number | null;
+  lookupDurationMs?: number | null;
   timestamp: string;
   startedAtIso?: string;
   isSample?: boolean;
@@ -585,11 +590,14 @@ class FixLoopApiClient {
               status,
               confidence,
               durationMs,
+              diagnosisDurationMs: (item.diagnosis_duration_ms as number) || null,
+              verificationDurationMs: (item.verification_duration_ms as number) || null,
+              lookupDurationMs: (item.lookup_duration_ms as number) || null,
               timestamp: formattedTimestamp || (item.timestamp as string) || "",
               startedAtIso: startedAtRaw,
               isSample,
               isCached: Boolean(item.is_cached),
-              originalDurationMs: (item.original_duration_ms as number) || null,
+              originalDurationMs: (item.original_duration_ms as number) || (item.diagnosis_duration_ms as number) || null,
               diagnosis: (item.diagnosis as DiagnoseResponse) || null,
               patchProposal: (item.patch_proposal as PatchProposal) || null,
               verificationReport: (item.verification_report as VerificationReport) || null,

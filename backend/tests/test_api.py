@@ -1,5 +1,7 @@
 """Comprehensive integration tests for FixLoop FastAPI endpoints: /health, /ready, /api/v1/diagnose."""
 
+import time
+import asyncio
 import pytest
 from httpx import AsyncClient, ASGITransport
 from backend.app.main import app
@@ -242,16 +244,18 @@ async def test_diagnose_then_verify_persists_in_investigations():
         assert single_data["outcome"] == "VERIFIED_FIX"
         assert single_data["verification_report"] is not None
 
-    @pytest.mark.asyncio
-    async def test_idempotent_diagnose_creates_single_investigation(self, client):
-        """Verify that two identical rapid submits with the same idempotency key create exactly one row."""
-        key = f"idem-test-{time.time()}"
-        payload = {
-            "service_name": "custom-auth-service",
-            "logs": "ERROR: auth token expired for user 42 in session middleware",
-            "idempotency_key": key,
-        }
 
+@pytest.mark.asyncio
+async def test_idempotent_diagnose_creates_single_investigation():
+    """Verify that two identical rapid submits with the same idempotency key create exactly one row."""
+    key = f"idem-test-{time.time()}"
+    payload = {
+        "service_name": "custom-auth-service",
+        "logs": "ERROR: auth token expired for user 42 in session middleware",
+        "idempotency_key": key,
+    }
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
         # Rapid submit 1
         resp1 = await client.post("/api/v1/diagnose", json=payload)
         assert resp1.status_code == 200
@@ -275,6 +279,73 @@ async def test_diagnose_then_verify_persists_in_investigations():
         invs = invs_res.json()
         matching_runs = [i for i in invs if i.get("id") == inv_id1 or i.get("idempotency_key") == key]
         assert len(matching_runs) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_duration_persists_identically_across_reads():
+    """Verify run duration is measured once on the server, never overwritten on later reads, and identical across calls."""
+    key = f"duration-test-{time.time()}"
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/v1/diagnose",
+            json={
+                "service_name": "scenario_a_missing_env",
+                "idempotency_key": key,
+            }
+        )
+        assert resp.status_code == 200
+        diag_data = resp.json()
+        inv_id = diag_data.get("investigation_id")
+        assert inv_id is not None
+        assert "duration_ms" in diag_data
+        assert diag_data["duration_ms"] > 0
+        reported_diag_duration = diag_data["duration_ms"]
+
+        # Fetch 1: Immediately after run
+        res1 = await client.get("/investigations")
+        assert res1.status_code == 200
+        invs1 = res1.json()
+        target_inv1 = next((i for i in invs1 if i["id"] == inv_id), None)
+        assert target_inv1 is not None
+        dur1 = target_inv1["duration_ms"]
+        assert dur1 == reported_diag_duration
+
+        # Wait briefly to ensure any clock tick wouldn't alter the stored value
+        await asyncio.sleep(0.05)
+
+        # Fetch 2: Second read
+        res2 = await client.get("/investigations")
+        assert res2.status_code == 200
+        invs2 = res2.json()
+        target_inv2 = next((i for i in invs2 if i["id"] == inv_id), None)
+        assert target_inv2 is not None
+        dur2 = target_inv2["duration_ms"]
+
+        # Stored duration must be 100% identical between reads
+        assert dur1 == dur2
+
+        # GET /investigations/{id} must also return the identical duration
+        single_res = await client.get(f"/investigations/{inv_id}")
+        assert single_res.status_code == 200
+        assert single_res.json()["duration_ms"] == dur1
+
+
+@pytest.mark.asyncio
+async def test_openapi_docs_contain_no_duplicate_api_prefixes():
+    """Verify /openapi.json contains no /api/api/v1/ duplicate routes."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/openapi.json")
+        assert res.status_code == 200
+        schema = res.json()
+        paths = schema.get("paths", {}).keys()
+        for p in paths:
+            assert not p.startswith("/api/api/"), f"Found duplicate prefix in OpenAPI path: {p}"
+        assert "/api/v1/diagnose" in paths
+        assert "/api/v1/verify" in paths
+
+
 
 
 

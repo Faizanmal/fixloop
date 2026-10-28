@@ -113,9 +113,16 @@ export default function Home() {
             for (const item of recentRuns) {
               const existing = map.get(item.id);
               if (existing) {
+                const isVerified =
+                  existing.status === "verified_fixed" ||
+                  item.status === "verified_fixed";
                 map.set(item.id, {
                   ...existing,
                   ...item,
+                  status: isVerified ? "verified_fixed" : item.status,
+                  durationMs: isVerified && existing.verificationReport && existing.durationMs > item.durationMs
+                    ? existing.durationMs
+                    : item.durationMs,
                   verificationReport:
                     item.verificationReport || existing.verificationReport,
                   diagnosis: item.diagnosis || existing.diagnosis,
@@ -136,7 +143,10 @@ export default function Home() {
 
     void executeLoad();
     const interval = setInterval(() => {
-      void executeLoad();
+      // Do not run background polls while diagnosis is in flight to keep UI responsive
+      if (!inFlightRef.current) {
+        void executeLoad();
+      }
     }, 12000);
 
     return () => {
@@ -183,11 +193,12 @@ export default function Home() {
         }
       }
 
-      // Record in recent history using server timestamp
+      // Record in recent history using server-measured authoritative duration
       const serverTimestamp = result.started_at_iso || new Date().toISOString();
-      const durationMs = result.is_cached && result.original_duration_ms
-        ? result.original_duration_ms
-        : Math.round(performance.now() - startTime);
+      const durationMs =
+        result.is_cached && result.original_duration_ms
+          ? result.original_duration_ms
+          : (result.duration_ms || Math.round(performance.now() - startTime));
       const invId =
         result.investigation_id || `RUN-${Date.now().toString().slice(-4)}`;
       const newHistoryItem: InvestigationHistoryItem = {
@@ -196,6 +207,8 @@ export default function Home() {
         status: result.status,
         confidence: result.confidence,
         durationMs,
+        diagnosisDurationMs: result.duration_ms || durationMs,
+        lookupDurationMs: result.lookup_duration_ms || null,
         timestamp: new Date(serverTimestamp).toLocaleTimeString(),
         startedAtIso: serverTimestamp,
         isSample: false,
@@ -262,19 +275,51 @@ export default function Home() {
       );
       setVerificationReport(report);
 
-      // Update history with verification outcome
+      // Update history with verification outcome immediately
       setHistory((prev) =>
         prev.map((item) =>
           item.id === (invId || prev[prev.length - 1]?.id)
             ? {
                 ...item,
                 status: report.status,
-                durationMs: item.durationMs + report.duration_ms,
+                durationMs: (item.diagnosisDurationMs || item.durationMs) + report.duration_ms,
+                verificationDurationMs: report.duration_ms,
                 verificationReport: report,
               }
             : item
         )
       );
+
+      // Refresh history from server immediately (Issue 2)
+      try {
+        const freshRuns = await apiClient.fetchRecentInvestigations();
+        if (freshRuns && freshRuns.length > 0) {
+          setHistory((prev) => {
+            const map = new Map<string, InvestigationHistoryItem>();
+            for (const p of prev) map.set(p.id, p);
+            for (const r of freshRuns) {
+              const existing = map.get(r.id);
+              if (existing) {
+                const isVerified = existing.status === "verified_fixed" || r.status === "verified_fixed";
+                map.set(r.id, {
+                  ...existing,
+                  ...r,
+                  status: isVerified ? "verified_fixed" : r.status,
+                  durationMs: isVerified && existing.verificationReport && existing.durationMs > r.durationMs
+                    ? existing.durationMs
+                    : r.durationMs,
+                  verificationReport: r.verificationReport || existing.verificationReport,
+                });
+              } else {
+                map.set(r.id, r);
+              }
+            }
+            return Array.from(map.values()).slice(-20);
+          });
+        }
+      } catch {
+        // Soft fallback
+      }
 
       // Update cache
       if (invId) {
@@ -329,9 +374,10 @@ export default function Home() {
       setDiagnosis(diagResult);
 
       const serverTimestamp = diagResult.started_at_iso || new Date().toISOString();
-      const durationMs = diagResult.is_cached && diagResult.original_duration_ms
-        ? diagResult.original_duration_ms
-        : Math.round(performance.now() - startTime);
+      const durationMs =
+        diagResult.is_cached && diagResult.original_duration_ms
+          ? diagResult.original_duration_ms
+          : (diagResult.duration_ms || Math.round(performance.now() - startTime));
       const invId =
         diagResult.investigation_id ||
         `DEMO-${Date.now().toString().slice(-4)}`;
@@ -341,6 +387,8 @@ export default function Home() {
         status: diagResult.status,
         confidence: diagResult.confidence,
         durationMs,
+        diagnosisDurationMs: diagResult.duration_ms || durationMs,
+        lookupDurationMs: diagResult.lookup_duration_ms || null,
         timestamp: new Date(serverTimestamp).toLocaleTimeString(),
         startedAtIso: serverTimestamp,
         isSample: false,
@@ -379,7 +427,7 @@ export default function Home() {
         );
         setVerificationReport(verifyResult);
 
-        // Update demoItem in history so row reflects VERIFIED FIXED with real combined duration
+        // Update demoItem in history immediately so row reflects VERIFIED FIXED without lag
         const finalReport = verifyResult;
         if (finalReport) {
           setHistory((prev) =>
@@ -388,12 +436,44 @@ export default function Home() {
                 ? {
                     ...item,
                     status: finalReport.status,
-                    durationMs: item.durationMs + finalReport.duration_ms,
+                    durationMs: (item.diagnosisDurationMs || item.durationMs) + finalReport.duration_ms,
+                    verificationDurationMs: finalReport.duration_ms,
                     verificationReport: finalReport,
                   }
                 : item
             )
           );
+
+          // Immediately refresh history from server (Issue 2)
+          try {
+            const freshRuns = await apiClient.fetchRecentInvestigations();
+            if (freshRuns && freshRuns.length > 0) {
+              setHistory((prev) => {
+                const map = new Map<string, InvestigationHistoryItem>();
+                for (const p of prev) map.set(p.id, p);
+                for (const r of freshRuns) {
+                  const existing = map.get(r.id);
+                  if (existing) {
+                    const isVerified = existing.status === "verified_fixed" || r.status === "verified_fixed";
+                    map.set(r.id, {
+                      ...existing,
+                      ...r,
+                      status: isVerified ? "verified_fixed" : r.status,
+                      durationMs: isVerified && existing.verificationReport && existing.durationMs > r.durationMs
+                        ? existing.durationMs
+                        : r.durationMs,
+                      verificationReport: r.verificationReport || existing.verificationReport,
+                    });
+                  } else {
+                    map.set(r.id, r);
+                  }
+                }
+                return Array.from(map.values()).slice(-20);
+              });
+            }
+          } catch {
+            // Soft fallback
+          }
         }
       }
 

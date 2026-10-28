@@ -167,6 +167,9 @@ class InvestigationState(BaseModel):
     outcome_summary: Optional[str] = None
     confidence: Optional[float] = None
     duration_ms: Optional[int] = None
+    diagnosis_duration_ms: Optional[int] = None
+    verification_duration_ms: Optional[int] = None
+    lookup_duration_ms: Optional[int] = None
     is_sample: bool = False
     diagnosis: Optional[Any] = None
     patch_proposal: Optional[Any] = None
@@ -288,6 +291,8 @@ class DiagnoseResponse(BaseModel):
     idempotency_key: Optional[str] = Field(default=None, description="Idempotency key for request deduplication")
     is_cached: bool = Field(default=False, description="True if response was served from cache")
     original_duration_ms: Optional[int] = Field(default=None, description="Original execution duration if served from cache")
+    lookup_duration_ms: Optional[int] = Field(default=None, description="Cache lookup duration in milliseconds")
+    duration_ms: Optional[int] = Field(default=None, description="Authoritative server execution duration in milliseconds")
     started_at_iso: Optional[str] = Field(default=None, description="Server creation ISO timestamp")
 
 

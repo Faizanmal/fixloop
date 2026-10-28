@@ -9,6 +9,7 @@ import {
   Check,
   ShieldCheck,
   Zap,
+  AlertCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
@@ -164,10 +165,33 @@ export function DiagnosticTimeline({
 
             {/* If no active probe was required */}
             {diagnosis.evidence.filter((e) => e.source.includes("probe") || e.source.includes("tool:")).length === 0 && (
-              <div className="text-slate-400 p-1 flex items-center gap-1.5 text-[11px]">
-                <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-                <span>Diagnostic Engine verified root cause deterministically from initial evidence. No active network probes were required.</span>
-              </div>
+              diagnosis.status === "insufficient_evidence" ? (
+                <div className="text-purple-300 bg-purple-950/20 p-2.5 rounded border border-purple-800/40 text-[11px] space-y-1">
+                  <div className="flex items-center gap-1.5 font-semibold text-purple-400">
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                    <span>Investigation Inconclusive: Insufficient Empirical Evidence</span>
+                  </div>
+                  <p className="text-slate-300">
+                    <strong className="text-slate-200">Established: </strong>
+                    Initial logs and container state were audited, but no deterministic configuration crash or reproducible error signature was found.
+                  </p>
+                  <p className="text-slate-300">
+                    <strong className="text-slate-200">Unresolved: </strong>
+                    Competing hypotheses remain inconclusive; safety invariant prevented synthesizing an unverified patch.
+                  </p>
+                  <p className="text-purple-200">
+                    <strong className="text-purple-300">Recommended Next Steps: </strong>
+                    {diagnosis.missing_information && diagnosis.missing_information.length > 0
+                      ? `Provide ${diagnosis.missing_information.join(", ")}.`
+                      : "Provide additional container runtime logs, stack traces, or environment configurations to disambiguate hypotheses."}
+                  </p>
+                </div>
+              ) : (
+                <div className="text-slate-400 p-1 flex items-center gap-1.5 text-[11px]">
+                  <ShieldCheck className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                  <span>Diagnostic Engine verified root cause deterministically from initial evidence. No active network probes were required.</span>
+                </div>
+              )
             )}
           </div>
         </div>

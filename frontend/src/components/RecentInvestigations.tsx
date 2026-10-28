@@ -144,13 +144,14 @@ export function RecentInvestigations({
                         <span>{formatDuration(item.durationMs)}</span>
                         {item.isCached && (
                           <span className="rounded bg-indigo-500/20 border border-indigo-500/40 px-1.5 py-0.2 text-[9px] font-mono text-indigo-300 font-semibold">
-                            Cached result
+                            Cached
                           </span>
                         )}
                       </div>
-                      {item.isCached && typeof item.originalDurationMs === "number" && item.originalDurationMs !== item.durationMs && (
-                        <span className="text-[10px] text-slate-500">
-                          Orig: {formatDuration(item.originalDurationMs)}
+                      {item.isCached && (
+                        <span className="text-[10px] text-slate-500 font-mono">
+                          Compute: {formatDuration(item.originalDurationMs || item.diagnosisDurationMs || item.durationMs)}
+                          {typeof item.lookupDurationMs === "number" && ` · Lookup: ${formatDuration(item.lookupDurationMs)}`}
                         </span>
                       )}
                     </div>

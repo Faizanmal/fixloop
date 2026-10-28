@@ -170,7 +170,7 @@ export function HypothesesList({
                           : "text-purple-400"
                       }`}
                     >
-                      {hypPct}% Confidence
+                      Hypothesis Score: {hypPct}%
                     </span>
                   </div>
                   <p className="text-xs text-slate-200 font-medium line-clamp-2 leading-relaxed mb-3">
@@ -223,9 +223,14 @@ export function HypothesesList({
                     <span className="font-mono text-xs text-cyan-400 font-bold">
                       {activeHypothesis.id || `HYP-${selectedHypothesisIndex + 1}`}
                     </span>
-                    <span className="font-mono text-xs text-slate-300 bg-slate-800 px-2 py-0.5 rounded">
-                      Calibrated Confidence: {((activeHypothesis.confidence ?? 0) * 100).toFixed(0)}%
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-xs text-slate-300 bg-slate-800 border border-slate-700 px-2 py-0.5 rounded">
+                        Hypothesis Score: {((activeHypothesis.confidence ?? 0) * 100).toFixed(0)}%
+                      </span>
+                      <span className="font-mono text-xs text-slate-400 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded">
+                        Calibrated: {confidencePct}%
+                      </span>
+                    </div>
                   </div>
                   <p className="text-sm text-slate-100 font-medium leading-relaxed">
                     {activeHypothesis.description}
