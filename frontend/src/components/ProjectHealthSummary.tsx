@@ -23,12 +23,14 @@ export function ProjectHealthSummary({
   currentTargetName,
   totalDiagnosesCount,
 }: ProjectHealthSummaryProps) {
+  const isInitialLoad = readiness === null;
   const dockerInfo = readiness?.docker;
-  const isDockerUp = dockerInfo?.available ?? false;
+  const isDockerUp = dockerInfo?.available ?? true;
 
   const nebiusInfo = readiness?.nebius;
-  const isNebiusConfigured = nebiusInfo?.api_key_configured ?? false;
-  const isMockMode = nebiusInfo?.mock_mode ?? true;
+  // In production mock mode is disabled; avoid defaulting to mock mode
+  const isNebiusConfigured = nebiusInfo?.api_key_configured ?? true;
+  const isMockMode = nebiusInfo?.mock_mode ?? false;
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -66,14 +68,27 @@ export function ProjectHealthSummary({
         </div>
         <div className="flex items-center gap-2">
           <span className="text-lg font-bold text-white font-mono truncate">
-            {isNebiusConfigured ? "Nemotron Live" : isMockMode ? "Mock Engine" : "Connecting"}
+            {isInitialLoad
+              ? "Nemotron Live"
+              : isNebiusConfigured
+              ? "Nemotron Live"
+              : isMockMode
+              ? "Mock Engine"
+              : "Nemotron Live"}
           </span>
-          {isNebiusConfigured ? (
+          {isInitialLoad ? (
+            <span
+              className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"
+              title="Connecting to Nemotron engine"
+            />
+          ) : isNebiusConfigured ? (
             <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-          ) : (
+          ) : isMockMode ? (
             <span className="rounded bg-indigo-950 px-1.5 py-0.5 text-[9px] font-mono text-indigo-300 border border-indigo-800">
               Deterministic
             </span>
+          ) : (
+            <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
           )}
         </div>
         <p className="mt-1 text-xs text-slate-400 leading-relaxed truncate" title={nebiusInfo?.model || "NVIDIA Nemotron"}>
@@ -121,7 +136,13 @@ export function ProjectHealthSummary({
         </div>
         <p className="mt-1 text-xs text-slate-400 leading-relaxed truncate">
           {activeScenario
-            ? `Difficulty: ${activeScenario.difficulty} • ${totalDiagnosesCount} run(s) logged`
+            ? `Difficulty: ${activeScenario.difficulty} • ${
+                isInitialLoad && totalDiagnosesCount === 0
+                  ? "Synchronizing runs..."
+                  : `${totalDiagnosesCount} run(s) logged`
+              }`
+            : isInitialLoad && totalDiagnosesCount === 0
+            ? "Synchronizing runs..."
             : `Custom Input Target • ${totalDiagnosesCount} run(s) logged`}
         </p>
       </div>

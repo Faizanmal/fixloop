@@ -80,3 +80,57 @@ export function getStatusColor(status: string): {
       };
   }
 }
+
+export function extractEnvVarInfo(text: string): { varName: string; defaultVal: string } | null {
+  if (!text) return null;
+  // 1. Regex for KeyError: 'VAR' or KeyError 'VAR'
+  const keyErrorMatch = text.match(/keyerror[:\s]+['"]([A-Z0-9_]+)['"]/i);
+  let varName: string | null = keyErrorMatch ? keyErrorMatch[1].toUpperCase() : null;
+
+  if (!varName) {
+    // 2. Regex for missing environment variable VAR
+    const missingMatch = text.match(
+      /(?:missing|unset|undefined)(?:\s+required)?(?:\s+environment)?\s+variable[:\s]+['"]?([A-Z0-9_]{2,})['"]?/i
+    );
+    if (missingMatch) {
+      varName = missingMatch[1].toUpperCase();
+    }
+  }
+
+  if (!varName) {
+    // 3. Known variable patterns
+    const knownVars = [
+      "REDIS_URL", "DATABASE_URL", "SECRET_KEY", "JWT_SECRET", "API_KEY",
+      "PORT", "RABBITMQ_URL", "MONGO_URI", "MONGODB_URI", "POSTGRES_URL",
+      "BACKEND_URL", "AUTH_TOKEN", "SESSION_SECRET"
+    ];
+    for (const known of knownVars) {
+      const rx = new RegExp(`\\b${known}\\b`, "i");
+      if (rx.test(text)) {
+        varName = known;
+        break;
+      }
+    }
+  }
+
+  if (!varName) return null;
+
+  const vUpper = varName.toUpperCase();
+  let defaultVal = `http://localhost:8000/${vUpper.toLowerCase()}`;
+  if (vUpper.includes("REDIS")) {
+    defaultVal = "redis://localhost:6379/0";
+  } else if (vUpper.includes("DATABASE") || vUpper.includes("POSTGRES")) {
+    defaultVal = "postgresql://app_user:app_pass@localhost:5432/app_db";
+  } else if (vUpper.includes("MONGO")) {
+    defaultVal = "mongodb://localhost:27017/app_db";
+  } else if (vUpper.includes("RABBIT") || vUpper.includes("AMQP")) {
+    defaultVal = "amqp://guest:guest@localhost:5672/";
+  } else if (vUpper.includes("PORT")) {
+    defaultVal = "8080";
+  } else if (["SECRET", "KEY", "TOKEN"].some((k) => vUpper.includes(k))) {
+    defaultVal = "dev_secret_key_change_in_production";
+  }
+
+  return { varName: vUpper, defaultVal };
+}
+

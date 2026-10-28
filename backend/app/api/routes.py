@@ -19,6 +19,8 @@ from backend.app.core.models import (
     DiagnoseRequest,
     DiagnoseResponse,
     DiagnoseHypothesis,
+    EvidenceItem,
+    EvidenceType,
     InvestigationState,
     InvestigationStatus,
     InvestigationOutcome,
@@ -31,6 +33,7 @@ from backend.app.agent.patcher import (
     PatchProposal,
     ControlledPatchGenerator,
     InsufficientEvidenceError,
+    extract_env_var_info,
 )
 from backend.app.sandbox.verifier import ControlledVerificationPipeline, VerificationReport
 from backend.app.llm.client import NebiusLLMClient
@@ -456,6 +459,27 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
                 else InvestigationOutcome.FAILED_FIX
             )
         )
+        evidence_items = []
+        if diagnosis.evidence:
+            evidence_items = [
+                EvidenceItem(
+                    id=f"ev-{idx+1}",
+                    type=EvidenceType.LOGS,
+                    source=e.source or "container.logs",
+                    content=e.content,
+                )
+                for idx, e in enumerate(diagnosis.evidence)
+            ]
+        elif request.logs:
+            evidence_items = [
+                EvidenceItem(
+                    id="ev-1",
+                    type=EvidenceType.LOGS,
+                    source="user.logs",
+                    content=request.logs,
+                )
+            ]
+
         inv_state = InvestigationState(
             id=inv_id,
             scenario_name=request.service_name or "custom_target",
@@ -468,6 +492,7 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             diagnosis_duration_ms=elapsed_ms,
             verification_duration_ms=None,
             is_sample=False,
+            evidence_store=evidence_items,
             diagnosis=diagnosis,
             started_at=now_dt,
             updated_at=now_dt,
@@ -563,25 +588,85 @@ async def verify_patch(request: VerifyPatchRequest) -> VerificationReport:
     scenario_dir = get_scenario_dir(request.scenario_name)
     if not scenario_dir:
         # Check if matching investigation or diagnosis exists for this service or ad-hoc target
-        text = request.scenario_name.lower()
-        if request.scenario_name in INVESTIGATION_DIAGNOSES:
-            d = INVESTIGATION_DIAGNOSES[request.scenario_name]
-            text += f" {d.summary} {' '.join(h.description for h in d.hypotheses)}".lower()
+        context_parts = [request.scenario_name]
+        if request.investigation_id:
+            context_parts.append(request.investigation_id)
+
+        for key in [request.investigation_id, request.scenario_name]:
+            if key and key in INVESTIGATION_DIAGNOSES:
+                d = INVESTIGATION_DIAGNOSES[key]
+                context_parts.append(d.summary)
+                context_parts.extend(h.description for h in d.hypotheses)
+                for h in d.hypotheses:
+                    context_parts.extend(h.supporting_evidence)
+                context_parts.extend(e.content for e in d.evidence)
+
+        target_inv_for_context = None
+        if request.investigation_id and request.investigation_id in INVESTIGATIONS_DB:
+            target_inv_for_context = INVESTIGATIONS_DB[request.investigation_id]
         else:
             for inv in reversed(list(INVESTIGATIONS_DB.values())):
                 if inv.scenario_name == request.scenario_name or inv.id == request.scenario_name:
-                    text += f" {inv.outcome_summary or ''}".lower()
+                    target_inv_for_context = inv
                     break
 
-        diff = (
-            "--- a/docker-compose.yml\n+++ b/docker-compose.yml\n@@ -7,6 +7,7 @@\n     ports:\n       - \"8080:8080\"\n     environment:\n+      - DATABASE_URL=postgresql://app_user:app_pass@localhost:5432/app_db\n       - PORT=8080\n       - LOG_LEVEL=debug\n"
-            if "database_url" in text or ("missing" in text and "env" in text)
-            else (
-                "--- a/docker-compose.yml\n+++ b/docker-compose.yml\n@@ -10,3 +10,3 @@\n     healthcheck:\n-      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8000/health\"]\n+      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8000/healthz\"]\n"
-                if "health" in text or "healthcheck" in text
-                else "--- a/docker-compose.yml\n+++ b/docker-compose.yml\n@@ -8,2 +8,2 @@\n     ports:\n-      - \"8000:5000\"\n+      - \"8000:8000\"\n"
+        if target_inv_for_context:
+            if target_inv_for_context.outcome_summary:
+                context_parts.append(target_inv_for_context.outcome_summary)
+            if target_inv_for_context.diagnosis and hasattr(target_inv_for_context.diagnosis, "summary"):
+                context_parts.append(target_inv_for_context.diagnosis.summary)
+            for ev in target_inv_for_context.evidence_store:
+                if hasattr(ev, "content") and ev.content:
+                    context_parts.append(ev.content)
+            for h in target_inv_for_context.hypotheses:
+                if hasattr(h, "description") and h.description:
+                    context_parts.append(h.description)
+                if hasattr(h, "supporting_evidence"):
+                    context_parts.extend(h.supporting_evidence)
+
+        full_context = " ".join(context_parts)
+        extracted_var, extracted_val = extract_env_var_info(full_context)
+
+        if extracted_var or "database_url" in full_context.lower() or "scenario_a" in full_context.lower():
+            effective_var = extracted_var or "DATABASE_URL"
+            effective_val = extracted_val or "postgresql://app_user:app_pass@localhost:5432/app_db"
+            diff = (
+                "--- a/docker-compose.yml\n"
+                "+++ b/docker-compose.yml\n"
+                "@@ -7,6 +7,7 @@\n"
+                "     ports:\n"
+                "       - \"8080:8080\"\n"
+                "     environment:\n"
+                f"+      - {effective_var}={effective_val}\n"
+                "       - PORT=8080\n"
+                "       - LOG_LEVEL=debug\n"
             )
-        )
+        elif "health" in full_context.lower() or "healthcheck" in full_context.lower() or "scenario_b" in full_context.lower():
+            diff = (
+                "--- a/docker-compose.yml\n"
+                "+++ b/docker-compose.yml\n"
+                "@@ -10,3 +10,3 @@\n"
+                "     healthcheck:\n"
+                "-      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8000/health\"]\n"
+                "+      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8000/healthz\"]\n"
+            )
+        elif "rate_limit" in full_context.lower() or "main.py" in full_context.lower() or "scenario_g" in full_context.lower():
+            diff = (
+                "--- a/main.py\n"
+                "+++ b/main.py\n"
+                "@@ -12,2 +12,2 @@\n"
+                "-RATE_LIMIT_BURST = \"unparsed_string\"\n"
+                "+RATE_LIMIT_BURST = 100\n"
+            )
+        else:
+            diff = (
+                "--- a/docker-compose.yml\n"
+                "+++ b/docker-compose.yml\n"
+                "@@ -8,2 +8,2 @@\n"
+                "     ports:\n"
+                "-      - \"8000:5000\"\n"
+                "+      - \"8000:8000\"\n"
+            )
         verify_elapsed = max(20, int((time.perf_counter() - verify_start) * 1000))
         report = VerificationReport(
             status=VerificationStatus.VERIFIED_FIXED,
@@ -659,20 +744,48 @@ async def propose_patch(scenario_name: str) -> PatchProposal:
             ) from exc
 
     # If scenario_dir is not found, check if it's an ad-hoc custom log run, investigation id, or custom service name
-    text = scenario_name.lower()
+    context_parts = [scenario_name]
     if scenario_name in INVESTIGATION_DIAGNOSES:
         d = INVESTIGATION_DIAGNOSES[scenario_name]
-        text += f" {d.summary} {' '.join(h.description for h in d.hypotheses)}".lower()
-    elif scenario_name in INVESTIGATIONS_DB:
+        context_parts.append(d.summary)
+        context_parts.extend(h.description for h in d.hypotheses)
+        for h in d.hypotheses:
+            context_parts.extend(h.supporting_evidence)
+        context_parts.extend(e.content for e in d.evidence)
+
+    if scenario_name in INVESTIGATIONS_DB:
         inv = INVESTIGATIONS_DB[scenario_name]
-        text += f" {inv.outcome_summary or ''}".lower()
+        if inv.outcome_summary:
+            context_parts.append(inv.outcome_summary)
+        for ev in inv.evidence_store:
+            if hasattr(ev, "content") and ev.content:
+                context_parts.append(ev.content)
+        for h in inv.hypotheses:
+            if hasattr(h, "description") and h.description:
+                context_parts.append(h.description)
+            if hasattr(h, "supporting_evidence"):
+                context_parts.extend(h.supporting_evidence)
     else:
         for inv in reversed(list(INVESTIGATIONS_DB.values())):
             if inv.scenario_name == scenario_name or inv.id == scenario_name:
-                text += f" {inv.outcome_summary or ''}".lower()
+                if inv.outcome_summary:
+                    context_parts.append(inv.outcome_summary)
+                for ev in inv.evidence_store:
+                    if hasattr(ev, "content") and ev.content:
+                        context_parts.append(ev.content)
+                for h in inv.hypotheses:
+                    if hasattr(h, "description") and h.description:
+                        context_parts.append(h.description)
+                    if hasattr(h, "supporting_evidence"):
+                        context_parts.extend(h.supporting_evidence)
                 break
 
-    if "database_url" in text or ("missing" in text and "env" in text) or "scenario_a" in text:
+    full_context = " ".join(context_parts)
+    extracted_var, extracted_val = extract_env_var_info(full_context)
+
+    if extracted_var or "database_url" in full_context.lower() or "scenario_a" in full_context.lower():
+        effective_var = extracted_var or "DATABASE_URL"
+        effective_val = extracted_val or "postgresql://app_user:app_pass@localhost:5432/app_db"
         return PatchProposal(
             id=f"patch-{scenario_name}-env",
             hypothesis_id="hyp-missing-env",
@@ -684,16 +797,16 @@ async def propose_patch(scenario_name: str) -> PatchProposal:
                 "     ports:\n"
                 "       - \"8080:8080\"\n"
                 "     environment:\n"
-                "+      - DATABASE_URL=postgresql://app_user:app_pass@localhost:5432/app_db\n"
+                f"+      - {effective_var}={effective_val}\n"
                 "       - PORT=8080\n"
                 "       - LOG_LEVEL=debug\n"
             ),
-            explanation="Added missing DATABASE_URL environment variable to service configuration in docker-compose.yml.",
+            explanation=f"Added missing {effective_var} environment variable to service configuration in docker-compose.yml.",
             risk_level="LOW",
             requires_human_approval=False,
             verification_procedure="verify_env_presence",
         )
-    elif "health" in text or "healthcheck" in text or "/healthz" in text or "scenario_b" in text:
+    elif "health" in full_context.lower() or "healthcheck" in full_context.lower() or "/healthz" in full_context.lower() or "scenario_b" in full_context.lower():
         return PatchProposal(
             id=f"patch-{scenario_name}-health",
             hypothesis_id="hyp-healthcheck-mismatch",
@@ -711,7 +824,7 @@ async def propose_patch(scenario_name: str) -> PatchProposal:
             requires_human_approval=False,
             verification_procedure="verify_healthcheck_endpoint",
         )
-    elif "rate_limit" in text or "main.py" in text or "scenario_g" in text:
+    elif "rate_limit" in full_context.lower() or "main.py" in full_context.lower() or "scenario_g" in full_context.lower():
         return PatchProposal(
             id=f"patch-{scenario_name}-config",
             hypothesis_id="hyp-config-regression",

@@ -394,6 +394,50 @@ async def test_repeat_scenario_run_is_marked_cached_with_original_duration():
         assert inv2.get("lookup_duration_ms") is not None
 
 
+@pytest.mark.asyncio
+async def test_custom_log_redis_keyerror_patch_proposal():
+    """Test that custom log KeyError 'REDIS_URL' proposes REDIS_URL patch, NOT hardcoded DATABASE_URL."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # Step 1: Submit custom log with REDIS_URL KeyError
+        diag_resp = await client.post(
+            "/api/v1/diagnose",
+            json={
+                "service_name": "Custom: auth-service",
+                "logs": "Traceback (most recent call last):\n  File 'app/config.py', line 12, in <module>\n    REDIS_URL = os.environ['REDIS_URL']\nKeyError: 'REDIS_URL'",
+            }
+        )
+        assert diag_resp.status_code == 200
+        diag_data = diag_resp.json()
+        inv_id = diag_data["investigation_id"]
+        assert inv_id is not None
+
+        # Step 2: Request patch proposal for this investigation
+        patch_resp = await client.post(f"/api/v1/patch?scenario_name={inv_id}")
+        assert patch_resp.status_code == 200
+        patch_data = patch_resp.json()
+
+        # Must propose REDIS_URL, NOT DATABASE_URL
+        assert "REDIS_URL" in patch_data["diff_unified"]
+        assert "DATABASE_URL" not in patch_data["diff_unified"]
+        assert "redis://" in patch_data["diff_unified"]
+        assert "REDIS_URL" in patch_data["explanation"]
+
+        # Step 3: Verify sandbox verification report also uses REDIS_URL
+        verify_resp = await client.post(
+            "/api/v1/verify",
+            json={
+                "scenario_name": "Custom: auth-service",
+                "investigation_id": inv_id,
+                "user_approved": True,
+            }
+        )
+        assert verify_resp.status_code == 200
+        verify_data = verify_resp.json()
+        assert "REDIS_URL" in verify_data["patch_diff"]
+        assert "DATABASE_URL" not in verify_data["patch_diff"]
+
+
+
 
 
 

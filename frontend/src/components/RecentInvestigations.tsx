@@ -36,11 +36,24 @@ export function RecentInvestigations({
 
   // Sort history: "desc" puts newer runs first (N→1), "asc" puts older runs first (1→N)
   const sortedHistory = [...history].sort((a, b) => {
-    if (sortOrder === "desc") {
-      return b.id.localeCompare(a.id, undefined, { numeric: true });
-    } else {
-      return a.id.localeCompare(b.id, undefined, { numeric: true });
+    // Primary: sort by startedAtIso epoch timestamp
+    const timeA = a.startedAtIso ? new Date(a.startedAtIso).getTime() : 0;
+    const timeB = b.startedAtIso ? new Date(b.startedAtIso).getTime() : 0;
+    if (timeA !== 0 && timeB !== 0 && timeA !== timeB) {
+      return sortOrder === "desc" ? timeB - timeA : timeA - timeB;
     }
+
+    // Secondary: parse numeric part of id (e.g. inv-0008 -> 8, RUN-1234 -> 1234)
+    const numA = parseInt(a.id.replace(/\D/g, ""), 10) || 0;
+    const numB = parseInt(b.id.replace(/\D/g, ""), 10) || 0;
+    if (numA !== numB) {
+      return sortOrder === "desc" ? numB - numA : numA - numB;
+    }
+
+    // Fallback: natural locale string compare
+    return sortOrder === "desc"
+      ? b.id.localeCompare(a.id, undefined, { numeric: true })
+      : a.id.localeCompare(b.id, undefined, { numeric: true });
   });
 
   return (

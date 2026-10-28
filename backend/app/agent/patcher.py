@@ -49,6 +49,52 @@ class InsufficientEvidenceError(Exception):
     pass
 
 
+def extract_env_var_info(text: str) -> Tuple[Optional[str], Optional[str]]:
+    """Extracts missing environment variable name and appropriate default value from diagnostic context."""
+    if not text:
+        return None, None
+    # 1. Regex for KeyError: 'VAR' or KeyError 'VAR'
+    m = re.search(r"keyerror[:\s]+['\"]([A-Z0-9_]+)['\"]", text, re.IGNORECASE)
+    if not m:
+        # 2. Regex for missing environment variable VAR
+        m = re.search(r"(?:missing|unset|undefined)(?:\s+required)?(?:\s+environment)?\s+variable[:\s]+['\"]?([A-Z0-9_]{2,})['\"]?", text, re.IGNORECASE)
+    if not m:
+        # 3. Look for explicit mentions of common variable names
+        for known in [
+            "REDIS_URL", "DATABASE_URL", "SECRET_KEY", "JWT_SECRET", "API_KEY",
+            "PORT", "RABBITMQ_URL", "MONGO_URI", "MONGODB_URI", "POSTGRES_URL",
+            "BACKEND_URL", "AUTH_TOKEN", "SESSION_SECRET"
+        ]:
+            if re.search(rf"\b{known}\b", text, re.IGNORECASE):
+                var_name = known
+                break
+        else:
+            var_name = None
+    else:
+        var_name = m.group(1).upper()
+
+    if not var_name:
+        return None, None
+
+    v_upper = var_name.upper()
+    if "REDIS" in v_upper:
+        default_val = "redis://localhost:6379/0"
+    elif "DATABASE" in v_upper or "POSTGRES" in v_upper:
+        default_val = "postgresql://app_user:app_pass@localhost:5432/app_db"
+    elif "MONGO" in v_upper:
+        default_val = "mongodb://localhost:27017/app_db"
+    elif "RABBIT" in v_upper or "AMQP" in v_upper:
+        default_val = "amqp://guest:guest@localhost:5672/"
+    elif "PORT" in v_upper:
+        default_val = "8080"
+    elif any(k in v_upper for k in ["SECRET", "KEY", "TOKEN"]):
+        default_val = "dev_secret_key_change_in_production"
+    else:
+        default_val = f"http://localhost:8000/{v_upper.lower()}"
+
+    return v_upper, default_val
+
+
 class PatchProposal(BaseModel):
     """Auditable reviewable patch proposal."""
     id: str
@@ -203,30 +249,36 @@ class ControlledPatchGenerator:
 
         desc = hypothesis.description.lower()
 
-        # Scenario A: Missing Environment Variable (DATABASE_URL)
-        if "database_url" in desc or "missing required environment" in desc:
+        # Scenario A / Missing Environment Variable (DATABASE_URL, REDIS_URL, etc.)
+        full_text = desc + " " + " ".join(hypothesis.supporting_evidence)
+        extracted_var, extracted_val = extract_env_var_info(full_text)
+        if extracted_var or "database_url" in desc or "missing required environment" in desc or "environment" in desc or "keyerror" in desc:
+            effective_var = extracted_var or "DATABASE_URL"
+            effective_val = extracted_val or "postgresql://app_user:app_pass@localhost:5432/app_db"
+
             compose_file = project_root / "docker-compose.yml"
             if not compose_file.exists():
                 raise FileNotFoundError("docker-compose.yml not found in project root")
 
             old_content = compose_file.read_text(encoding="utf-8", errors="replace")
             nl = "\r\n" if "\r\n" in old_content else "\n"
-            # Generate minimal diff adding DATABASE_URL
+            env_line = f"      - {effective_var}={effective_val}{nl}"
+            # Generate minimal diff adding the specific environment variable
             if f"environment:{nl}" in old_content:
                 new_content = old_content.replace(
                     f"environment:{nl}",
-                    f"environment:{nl}      - DATABASE_URL=postgresql://app_user:app_pass@localhost:5432/app_db{nl}",
+                    f"environment:{nl}{env_line}",
                     1,
                 )
             elif "environment:" in old_content:
                 new_content = re.sub(
                     r"environment:\r?\n",
-                    f"environment:{nl}      - DATABASE_URL=postgresql://app_user:app_pass@localhost:5432/app_db{nl}",
+                    f"environment:{nl}{env_line}",
                     old_content,
                     count=1,
                 )
             else:
-                new_content = old_content + f"{nl}    environment:{nl}      - DATABASE_URL=postgresql://app_user:app_pass@localhost:5432/app_db{nl}"
+                new_content = old_content + f"{nl}    environment:{nl}{env_line}"
 
             diff = "".join(difflib.unified_diff(
                 old_content.splitlines(keepends=True),
@@ -236,11 +288,11 @@ class ControlledPatchGenerator:
             ))
 
             return PatchProposal(
-                id="patch-missing-env-1",
-                hypothesis_id="hyp-missing-env",
+                id=f"patch-missing-{effective_var.lower()}",
+                hypothesis_id=f"hyp-missing-{effective_var.lower()}",
                 target_file="docker-compose.yml",
                 diff_unified=diff,
-                explanation="Added missing DATABASE_URL environment variable to service configuration in docker-compose.yml.",
+                explanation=f"Added missing {effective_var} environment variable to service configuration in docker-compose.yml.",
                 risk_level="LOW",
                 requires_human_approval=False,
                 verification_procedure="verify_env_presence",

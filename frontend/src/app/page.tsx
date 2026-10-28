@@ -28,6 +28,7 @@ import {
   ShieldCheck,
   History,
 } from "lucide-react";
+import { extractEnvVarInfo } from "@/lib/utils";
 
 export default function Home() {
   // System Readiness & Scenarios
@@ -64,6 +65,11 @@ export default function Home() {
   useEffect(() => {
     selectedScenarioIdRef.current = selectedScenarioId;
   }, [selectedScenarioId]);
+
+  const inspectedRunIdRef = useRef<string | null>(inspectedRunId);
+  useEffect(() => {
+    inspectedRunIdRef.current = inspectedRunId;
+  }, [inspectedRunId]);
 
   // In-flight request protection & inspection sequence tracking to prevent race conditions
   const inFlightRef = useRef<boolean>(false);
@@ -147,11 +153,11 @@ export default function Home() {
 
     void executeLoad();
     const interval = setInterval(() => {
-      // Do not run background polls while diagnosis is in flight to keep UI responsive
-      if (!inFlightRef.current) {
+      // Do not run background polls while diagnosis is in flight or user is inspecting to prevent list shifts
+      if (!inFlightRef.current && !inspectedRunIdRef.current) {
         void executeLoad();
       }
-    }, 12000);
+    }, 60000);
 
     return () => {
       isMounted = false;
@@ -634,27 +640,33 @@ export default function Home() {
     }
 
     // Derive from diagnosis summary, hypotheses and scenario text
-    const text = (
-      (diag?.summary || "") +
-      " " +
-      (diag?.hypotheses?.[0]?.description || "") +
-      " " +
-      scenarioId
-    ).toLowerCase();
+    const contextText = [
+      diag?.summary || "",
+      diag?.hypotheses?.[0]?.description || "",
+      ...(diag?.hypotheses?.[0]?.supporting_evidence || []),
+      ...(diag?.evidence?.map((e) => e.content) || []),
+      scenarioId,
+    ].join(" ");
 
+    const envInfo = extractEnvVarInfo(contextText);
     if (
-      text.includes("database_url") ||
-      (text.includes("missing") && text.includes("env")) ||
-      text.includes("scenario_a")
+      envInfo ||
+      contextText.toLowerCase().includes("database_url") ||
+      contextText.toLowerCase().includes("scenario_a")
     ) {
+      const varName = envInfo?.varName || "DATABASE_URL";
+      const defaultVal =
+        envInfo?.defaultVal ||
+        "postgresql://app_user:app_pass@localhost:5432/app_db";
       return {
-        diff: `--- a/docker-compose.yml\n+++ b/docker-compose.yml\n@@ -7,6 +7,7 @@\n     ports:\n       - "8080:8080"\n     environment:\n+      - DATABASE_URL=postgresql://app_user:app_pass@localhost:5432/app_db\n       - PORT=8080\n       - LOG_LEVEL=debug`,
+        diff: `--- a/docker-compose.yml\n+++ b/docker-compose.yml\n@@ -7,6 +7,7 @@\n     ports:\n       - "8080:8080"\n     environment:\n+      - ${varName}=${defaultVal}\n       - PORT=8080\n       - LOG_LEVEL=debug`,
         targetFile: "docker-compose.yml",
-        explanation:
-          "Added missing DATABASE_URL environment variable to service configuration in docker-compose.yml.",
+        explanation: `Added missing ${varName} environment variable to service configuration in docker-compose.yml.`,
         procedure: "verify_env_presence",
       };
     }
+
+    const text = contextText.toLowerCase();
 
     if (
       text.includes("health") ||
@@ -900,7 +912,9 @@ export default function Home() {
                       ? "patch_blocked"
                       : diagnosis.status);
                   const effectiveDuration = activeItem?.durationMs;
-                  const isCached = activeItem?.isCached;
+                  const isCached = activeItem?.isCached ?? diagnosis.is_cached;
+                  const originalDurationMs = activeItem?.originalDurationMs ?? diagnosis.original_duration_ms;
+                  const lookupDurationMs = activeItem?.lookupDurationMs ?? diagnosis.lookup_duration_ms;
 
                   return (
                     <HypothesesList
@@ -914,6 +928,8 @@ export default function Home() {
                       verificationReport={verificationReport}
                       durationMs={effectiveDuration}
                       isCached={isCached}
+                      originalDurationMs={originalDurationMs}
+                      lookupDurationMs={lookupDurationMs}
                       runId={activeItem?.id || diagnosis.investigation_id || undefined}
                     />
                   );

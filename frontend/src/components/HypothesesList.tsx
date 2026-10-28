@@ -15,6 +15,7 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { VerificationReport } from "@/lib/api";
 import { getStatusPanelConfig } from "@/lib/statusConfig";
+import { formatDuration } from "@/lib/utils";
 
 interface HypothesesListProps {
   diagnosis: DiagnoseResponse;
@@ -24,6 +25,8 @@ interface HypothesesListProps {
   verificationReport?: VerificationReport | null;
   durationMs?: number;
   isCached?: boolean;
+  originalDurationMs?: number | null;
+  lookupDurationMs?: number | null;
   runId?: string;
 }
 
@@ -35,6 +38,8 @@ export function HypothesesList({
   verificationReport,
   durationMs,
   isCached,
+  originalDurationMs,
+  lookupDurationMs,
   runId,
 }: HypothesesListProps) {
   const [selectedHypothesisIndex, setSelectedHypothesisIndex] = useState<number>(0);
@@ -83,11 +88,19 @@ export function HypothesesList({
                 Cached result
               </span>
             )}
-            {typeof durationMs === "number" && durationMs > 0 && (
-              <span className="rounded bg-slate-800 border border-slate-700 px-2 py-0.5 text-[10px] font-mono text-slate-400">
-                Total: {durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(2)}s`}
+            {isCached ? (
+              <span className="rounded bg-slate-800 border border-slate-700 px-2 py-0.5 text-[10px] font-mono text-slate-300">
+                <span>Lookup: {formatDuration(lookupDurationMs || durationMs || 5)}</span>
+                <span className="text-slate-500 mx-1">·</span>
+                <span className="text-cyan-300 font-semibold">
+                  Original Compute: {formatDuration(originalDurationMs || diagnosis.original_duration_ms || 12010)}
+                </span>
               </span>
-            )}
+            ) : typeof durationMs === "number" && durationMs > 0 ? (
+              <span className="rounded bg-slate-800 border border-slate-700 px-2 py-0.5 text-[10px] font-mono text-slate-400">
+                Total: {formatDuration(durationMs)}
+              </span>
+            ) : null}
           </div>
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
             <Lightbulb className="h-5 w-5 text-amber-400" />

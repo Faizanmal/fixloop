@@ -1,6 +1,7 @@
 import assert from "node:assert";
 import test from "node:test";
 import { getStatusPanelConfig, type VerificationReportLike } from "./statusConfig";
+import { extractEnvVarInfo } from "./utils";
 
 test("verified_fixed status yields verified badge and next step to review/apply patch", () => {
   const dummyReport: VerificationReportLike = {
@@ -95,3 +96,31 @@ test("Step 3 Active Probing description does not state deterministic crash for i
     "Probing evaluated (no active probe required for deterministic crash)"
   );
 });
+
+test("extractEnvVarInfo extracts REDIS_URL and connection default correctly", () => {
+  const result = extractEnvVarInfo("Traceback: line 12 KeyError: 'REDIS_URL'\nFailed to connect");
+  assert.notStrictEqual(result, null);
+  assert.strictEqual(result?.varName, "REDIS_URL");
+  assert.strictEqual(result?.defaultVal, "redis://localhost:6379/0");
+});
+
+test("extractEnvVarInfo extracts DATABASE_URL and postgres default correctly", () => {
+  const result = extractEnvVarInfo("Missing required environment variable: DATABASE_URL for pool initialization");
+  assert.notStrictEqual(result, null);
+  assert.strictEqual(result?.varName, "DATABASE_URL");
+  assert.strictEqual(result?.defaultVal, "postgresql://app_user:app_pass@localhost:5432/app_db");
+});
+
+test("extractEnvVarInfo handles security and port tokens", () => {
+  const jwt = extractEnvVarInfo("KeyError 'JWT_SECRET'");
+  assert.strictEqual(jwt?.varName, "JWT_SECRET");
+  assert.strictEqual(jwt?.defaultVal, "dev_secret_key_change_in_production");
+
+  const port = extractEnvVarInfo("undefined environment variable PORT");
+  assert.strictEqual(port?.varName, "PORT");
+  assert.strictEqual(port?.defaultVal, "8080");
+
+  const unrelated = extractEnvVarInfo("404 healthcheck probe failed");
+  assert.strictEqual(unrelated, null);
+});
+
