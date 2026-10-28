@@ -13,12 +13,14 @@ import {
 interface ProjectHealthSummaryProps {
   readiness: SystemReadiness | null;
   activeScenario: ScenarioInfo | null;
+  currentTargetName?: string;
   totalDiagnosesCount: number;
 }
 
 export function ProjectHealthSummary({
   readiness,
   activeScenario,
+  currentTargetName,
   totalDiagnosesCount,
 }: ProjectHealthSummaryProps) {
   const dockerInfo = readiness?.docker;
@@ -106,12 +108,21 @@ export function ProjectHealthSummary({
           <Layers className="h-4 w-4 text-amber-400" />
         </div>
         <div className="flex items-baseline gap-2 truncate">
-          <span className="text-lg font-bold text-amber-300 font-mono truncate" title={activeScenario?.name}>
-            {activeScenario ? activeScenario.name.split(":")[0] : "None Selected"}
+          <span
+            className="text-lg font-bold text-amber-300 font-mono truncate"
+            title={activeScenario ? activeScenario.name : (currentTargetName || "Custom Target")}
+          >
+            {activeScenario
+              ? activeScenario.name.split(":")[0]
+              : currentTargetName
+              ? `Custom: ${currentTargetName}`
+              : "Custom Log Target"}
           </span>
         </div>
         <p className="mt-1 text-xs text-slate-400 leading-relaxed truncate">
-          {activeScenario ? `Difficulty: ${activeScenario.difficulty} • ${totalDiagnosesCount} run(s) logged` : `${totalDiagnosesCount} run(s) logged`}
+          {activeScenario
+            ? `Difficulty: ${activeScenario.difficulty} • ${totalDiagnosesCount} run(s) logged`
+            : `Custom Input Target • ${totalDiagnosesCount} run(s) logged`}
         </p>
       </div>
     </div>

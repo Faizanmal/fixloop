@@ -48,6 +48,8 @@ export function DiagnosticTimeline({
       name: "Active Probing",
       desc: probesCount > 0
         ? `${probesCount} allowlisted HTTP/TCP probe(s) dispatched`
+        : diagnosis?.status === "insufficient_evidence"
+        ? "Local probes evaluated and exhausted; external dependency prevented local deterministic probing"
         : "Probing evaluated (no active probe required for deterministic crash)",
       completed: !!diagnosis,
       active: false,

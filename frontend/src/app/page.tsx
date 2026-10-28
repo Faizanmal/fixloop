@@ -53,6 +53,9 @@ export default function Home() {
   const [history, setHistory] = useState<InvestigationHistoryItem[]>([]);
   const [showDemoNotification, setShowDemoNotification] =
     useState<boolean>(false);
+  const [demoScenario, setDemoScenario] = useState<string>(
+    "scenario_b_healthcheck_mismatch"
+  );
   const [inspectedRunId, setInspectedRunId] = useState<string | null>(null);
   const [isLoadingInspect, setIsLoadingInspect] = useState<boolean>(false);
   const [inspectError, setInspectError] = useState<string | null>(null);
@@ -62,8 +65,9 @@ export default function Home() {
     selectedScenarioIdRef.current = selectedScenarioId;
   }, [selectedScenarioId]);
 
-  // In-flight request protection to prevent duplicate runs
+  // In-flight request protection & inspection sequence tracking to prevent race conditions
   const inFlightRef = useRef<boolean>(false);
+  const inspectSeqRef = useRef<number>(0);
 
   // In-memory cache for fast historical run inspection
   const investigationCache = useRef<
@@ -156,7 +160,7 @@ export default function Home() {
   }, []);
 
   const activeScenario =
-    scenarios.find((s) => s.id === selectedScenarioId) || scenarios[0];
+    scenarios.find((s) => s.id === selectedScenarioId) || null;
 
   // 1. Run Investigation Handler
   const handleStartInvestigation = async (
@@ -196,9 +200,7 @@ export default function Home() {
       // Record in recent history using server-measured authoritative duration
       const serverTimestamp = result.started_at_iso || new Date().toISOString();
       const durationMs =
-        result.is_cached && result.original_duration_ms
-          ? result.original_duration_ms
-          : (result.duration_ms || Math.round(performance.now() - startTime));
+        result.duration_ms || Math.round(performance.now() - startTime);
       const invId =
         result.investigation_id || `RUN-${Date.now().toString().slice(-4)}`;
       const newHistoryItem: InvestigationHistoryItem = {
@@ -208,7 +210,7 @@ export default function Home() {
         confidence: result.confidence,
         durationMs,
         diagnosisDurationMs: result.duration_ms || durationMs,
-        lookupDurationMs: result.lookup_duration_ms || null,
+        lookupDurationMs: result.lookup_duration_ms || (result.is_cached ? durationMs : null),
         timestamp: new Date(serverTimestamp).toLocaleTimeString(),
         startedAtIso: serverTimestamp,
         isSample: false,
@@ -244,6 +246,7 @@ export default function Home() {
 
   // Preset Benchmarks Launcher: always uses selected preset and isolates preset from custom logs
   const handleStartPresetInvestigation = async (presetId?: string) => {
+    setShowDemoNotification(false);
     const target =
       presetId ||
       (scenarios.some((s) => s.id === selectedPresetId)
@@ -256,6 +259,7 @@ export default function Home() {
 
   // 2. Custom Logs Diagnostic Handler
   const handleCustomDiagnose = async (serviceName: string, logs: string) => {
+    setShowDemoNotification(false);
     const target = serviceName.trim() || "custom-service";
     setSelectedScenarioId(target);
     await handleStartInvestigation(logs, target);
@@ -349,9 +353,16 @@ export default function Home() {
   const handleQuickDemo = async () => {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
+    const targetScenario =
+      (scenarios.some((s) => s.id === selectedScenarioId)
+        ? selectedScenarioId
+        : scenarios.some((s) => s.id === selectedPresetId)
+        ? selectedPresetId
+        : "scenario_b_healthcheck_mismatch");
+    setDemoScenario(targetScenario);
     setShowDemoNotification(true);
-    setSelectedPresetId("scenario_b_healthcheck_mismatch");
-    setSelectedScenarioId("scenario_b_healthcheck_mismatch");
+    setSelectedPresetId(targetScenario);
+    setSelectedScenarioId(targetScenario);
     setIsInvestigating(true);
     setErrorMessage(null);
     setDiagnosis(null);
@@ -365,9 +376,9 @@ export default function Home() {
 
     try {
       const idempotencyKey = `demo-${Date.now()}`;
-      // Step 1: Run Diagnosis on Scenario B
+      // Step 1: Run Diagnosis on Target Scenario
       const diagResult = await apiClient.runDiagnosis(
-        "scenario_b_healthcheck_mismatch",
+        targetScenario,
         undefined,
         idempotencyKey
       );
@@ -375,20 +386,18 @@ export default function Home() {
 
       const serverTimestamp = diagResult.started_at_iso || new Date().toISOString();
       const durationMs =
-        diagResult.is_cached && diagResult.original_duration_ms
-          ? diagResult.original_duration_ms
-          : (diagResult.duration_ms || Math.round(performance.now() - startTime));
+        diagResult.duration_ms || Math.round(performance.now() - startTime);
       const invId =
         diagResult.investigation_id ||
         `DEMO-${Date.now().toString().slice(-4)}`;
       const demoItem: InvestigationHistoryItem = {
         id: invId,
-        scenarioName: "scenario_b_healthcheck_mismatch",
+        scenarioName: targetScenario,
         status: diagResult.status,
         confidence: diagResult.confidence,
         durationMs,
         diagnosisDurationMs: diagResult.duration_ms || durationMs,
-        lookupDurationMs: diagResult.lookup_duration_ms || null,
+        lookupDurationMs: diagResult.lookup_duration_ms || (diagResult.is_cached ? durationMs : null),
         timestamp: new Date(serverTimestamp).toLocaleTimeString(),
         startedAtIso: serverTimestamp,
         isSample: false,
@@ -406,7 +415,7 @@ export default function Home() {
 
       // Step 2: Fetch Patch Proposal
       const patch = await apiClient.fetchPatchProposal(
-        "scenario_b_healthcheck_mismatch"
+        diagResult.investigation_id || targetScenario
       );
       if (patch) {
         setPatchProposal(patch);
@@ -421,7 +430,7 @@ export default function Home() {
       ) {
         setIsVerifying(true);
         verifyResult = await apiClient.runVerification(
-          "scenario_b_healthcheck_mismatch",
+          targetScenario,
           true,
           invId
         );
@@ -496,6 +505,8 @@ export default function Home() {
 
   // 5. Inspect button handler for historical runs
   const handleSelectHistoryItem = async (item: InvestigationHistoryItem) => {
+    const currentSeq = ++inspectSeqRef.current;
+    setShowDemoNotification(false);
     setSelectedScenarioId(item.scenarioName);
     setInspectedRunId(item.id);
     setErrorMessage(null);
@@ -506,12 +517,14 @@ export default function Home() {
       // 1. Check in-memory cache first
       const cached = investigationCache.current.get(item.id);
       if (cached && cached.diagnosis) {
+        if (currentSeq !== inspectSeqRef.current) return;
         setDiagnosis(cached.diagnosis);
         setPatchProposal(cached.patchProposal);
         setVerificationReport(cached.verificationReport);
         setIsLoadingInspect(false);
       } else if (item.diagnosis) {
         // 2. Use item preloaded data if present
+        if (currentSeq !== inspectSeqRef.current) return;
         setDiagnosis(item.diagnosis);
         setPatchProposal(item.patchProposal || null);
         setVerificationReport(item.verificationReport || null);
@@ -524,6 +537,7 @@ export default function Home() {
       } else {
         // 3. Fetch from backend /investigations/:id
         const fullInv = await apiClient.fetchInvestigation(item.id);
+        if (currentSeq !== inspectSeqRef.current) return;
         let diag: DiagnoseResponse | null = null;
         let patch: PatchProposal | null = null;
         let report: VerificationReport | null = null;
@@ -533,6 +547,8 @@ export default function Home() {
         } else {
           diag = await apiClient.fetchInvestigationDiagnosis(item.id);
         }
+
+        if (currentSeq !== inspectSeqRef.current) return;
 
         if (fullInv?.verification_report) {
           report = fullInv.verification_report as VerificationReport;
@@ -559,6 +575,8 @@ export default function Home() {
           );
         }
 
+        if (currentSeq !== inspectSeqRef.current) return;
+
         if (diag) {
           setDiagnosis(diag);
           setPatchProposal(patch);
@@ -574,6 +592,7 @@ export default function Home() {
         setIsLoadingInspect(false);
       }
     } catch (err: unknown) {
+      if (currentSeq !== inspectSeqRef.current) return;
       console.warn("Failed to load investigation details:", err);
       setInspectError(
         err instanceof Error ? err.message : "Failed to load run details."
@@ -582,10 +601,12 @@ export default function Home() {
     }
 
     // Scroll into view so the detail panel reflects the inspected run immediately
-    setTimeout(() => {
-      const el = document.getElementById("diagnostic-results-section");
-      el?.scrollIntoView({ behavior: "smooth" });
-    }, 100);
+    if (currentSeq === inspectSeqRef.current) {
+      setTimeout(() => {
+        const el = document.getElementById("diagnostic-results-section");
+        el?.scrollIntoView({ behavior: "smooth" });
+      }, 100);
+    }
   };
 
   // Dedicated helper to resolve honest, matching patch diff for custom logs or preset scenarios
@@ -699,11 +720,12 @@ export default function Home() {
                 <h4 className="text-sm font-bold text-white font-mono flex items-center gap-2">
                   <span>3-Minute Judge Demonstration Workflow Activated</span>
                   <span className="rounded bg-cyan-500/20 px-2 py-0.5 text-[10px] text-cyan-300 font-mono">
-                    Scenario B
+                    {scenarios.find((s) => s.id === demoScenario)?.name.split(":")[0] || demoScenario}
                   </span>
                 </h4>
                 <p className="text-xs text-slate-300 mt-0.5 leading-relaxed">
-                  Demonstrating complete end-to-end cycle: Normal logs &rarr; Active HTTP probe detects /healthz (200 OK) vs /health (404) &rarr; Formulates 98% confidence hypothesis &rarr; Synthesizes minimal patch diff &rarr; Verifies in disposable sandbox.
+                  {scenarios.find((s) => s.id === demoScenario)?.description ||
+                    "Demonstrating complete end-to-end cycle: Evidence Ingestion &rarr; Root-Cause Diagnosis &rarr; Minimal Patch Diff &rarr; Sandboxed Verification."}
                 </p>
               </div>
             </div>
@@ -744,6 +766,7 @@ export default function Home() {
         <ProjectHealthSummary
           readiness={readiness}
           activeScenario={activeScenario}
+          currentTargetName={!activeScenario ? selectedScenarioId : undefined}
           totalDiagnosesCount={history.length}
         />
 
@@ -752,6 +775,7 @@ export default function Home() {
           scenarios={scenarios}
           selectedScenario={selectedPresetId}
           onSelectScenario={(id) => {
+            setShowDemoNotification(false);
             setSelectedPresetId(id);
             setSelectedScenarioId(id);
             setDiagnosis(null);
@@ -890,6 +914,7 @@ export default function Home() {
                       verificationReport={verificationReport}
                       durationMs={effectiveDuration}
                       isCached={isCached}
+                      runId={activeItem?.id || diagnosis.investigation_id || undefined}
                     />
                   );
                 })()}

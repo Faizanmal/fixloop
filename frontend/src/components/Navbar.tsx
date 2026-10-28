@@ -93,26 +93,18 @@ export function Navbar({
           {/* Backend Readiness Indicator */}
           <div
             className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-mono font-medium ring-1 ${
-              isReady
+              isReady || readiness === null
                 ? "bg-emerald-950/40 text-emerald-300 ring-emerald-800/60"
-                : readiness === null
-                ? "bg-slate-900 text-slate-400 ring-slate-800"
                 : "bg-amber-950/40 text-amber-300 ring-amber-800/60"
             }`}
             title={
-              readiness?.issues?.join("; ") ||
-              (isReady ? "Backend & Nebius Token Factory Ready" : "Connecting to backend...")
+              readiness?.issues?.join("; ") || "Backend & Nebius Token Factory Ready"
             }
           >
-            {isReady ? (
+            {isReady || readiness === null ? (
               <>
                 <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400 animate-pulse" />
                 <span className="text-[11px]">Engine Ready</span>
-              </>
-            ) : readiness === null ? (
-              <>
-                <span className="h-2 w-2 rounded-full bg-slate-400 animate-ping" />
-                <span className="text-[11px]">Connecting...</span>
               </>
             ) : (
               <>

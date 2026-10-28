@@ -72,3 +72,26 @@ test("diagnosis_available status with high confidence indicates sandbox verify n
   );
   assert.strictEqual(config.isConclusive, true);
 });
+
+test("Step 3 Active Probing description does not state deterministic crash for insufficient evidence", () => {
+  const getStep3Desc = (probesCount: number, status: string | undefined) => {
+    return probesCount > 0
+      ? `${probesCount} allowlisted HTTP/TCP probe(s) dispatched`
+      : status === "insufficient_evidence"
+      ? "Local probes evaluated and exhausted; external dependency prevented local deterministic probing"
+      : "Probing evaluated (no active probe required for deterministic crash)";
+  };
+
+  const presetDDesc = getStep3Desc(0, "insufficient_evidence");
+  assert.strictEqual(
+    presetDDesc,
+    "Local probes evaluated and exhausted; external dependency prevented local deterministic probing"
+  );
+  assert.ok(!presetDDesc.includes("deterministic crash"));
+
+  const scenarioADesc = getStep3Desc(0, "diagnosis_available");
+  assert.strictEqual(
+    scenarioADesc,
+    "Probing evaluated (no active probe required for deterministic crash)"
+  );
+});

@@ -346,6 +346,54 @@ async def test_openapi_docs_contain_no_duplicate_api_prefixes():
         assert "/api/v1/verify" in paths
 
 
+@pytest.mark.asyncio
+async def test_repeat_scenario_run_is_marked_cached_with_original_duration():
+    """Verify that repeat runs of the same scenario are labeled Cached with original compute time and distinct rows."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Run 1: Initial execution
+        resp1 = await client.post(
+            "/api/v1/diagnose",
+            json={"service_name": "scenario_a_missing_env", "idempotency_key": f"run1-{time.time()}"}
+        )
+        assert resp1.status_code == 200
+        data1 = resp1.json()
+        inv_id1 = data1["investigation_id"]
+        assert inv_id1 is not None
+
+        # Run 2: Repeat execution (different idempotency key)
+        resp2 = await client.post(
+            "/api/v1/diagnose",
+            json={"service_name": "scenario_a_missing_env", "idempotency_key": f"run2-{time.time()}"}
+        )
+        assert resp2.status_code == 200
+        data2 = resp2.json()
+        inv_id2 = data2["investigation_id"]
+
+        # Each repeat is logged as a distinct new row
+        assert inv_id2 != inv_id1
+        # Labeled as cached
+        assert data2.get("is_cached") is True
+        # Original duration is provided
+        assert data2.get("original_duration_ms") is not None
+        assert data2["original_duration_ms"] > 0
+        # Lookup duration is fast
+        assert data2.get("lookup_duration_ms") is not None
+        assert data2["lookup_duration_ms"] > 0
+
+        # Verify both rows persist distinctly in /investigations
+        invs_res = await client.get("/investigations")
+        assert invs_res.status_code == 200
+        invs = invs_res.json()
+        inv1 = next((i for i in invs if i["id"] == inv_id1), None)
+        inv2 = next((i for i in invs if i["id"] == inv_id2), None)
+        assert inv1 is not None
+        assert inv2 is not None
+        assert inv2.get("is_cached") is True
+        assert inv2.get("original_duration_ms") is not None
+        assert inv2.get("lookup_duration_ms") is not None
+
+
 
 
 

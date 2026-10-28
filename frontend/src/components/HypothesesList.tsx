@@ -24,6 +24,7 @@ interface HypothesesListProps {
   verificationReport?: VerificationReport | null;
   durationMs?: number;
   isCached?: boolean;
+  runId?: string;
 }
 
 export function HypothesesList({
@@ -34,12 +35,14 @@ export function HypothesesList({
   verificationReport,
   durationMs,
   isCached,
+  runId,
 }: HypothesesListProps) {
   const [selectedHypothesisIndex, setSelectedHypothesisIndex] = useState<number>(0);
 
   const hypotheses = diagnosis.hypotheses || [];
   const activeHypothesis = hypotheses[selectedHypothesisIndex] || hypotheses[0];
   const confidencePct = Math.round(diagnosis.confidence * 100);
+  const runIdToDisplay = runId || diagnosis.investigation_id;
 
   const effectiveStatus =
     runStatus ||
@@ -62,6 +65,11 @@ export function HypothesesList({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800 mb-5">
         <div>
           <div className="flex flex-wrap items-center gap-2 mb-1">
+            {runIdToDisplay && (
+              <span className="rounded bg-slate-800 border border-slate-700 px-2 py-0.5 text-[11px] font-mono font-bold text-cyan-300">
+                {runIdToDisplay}
+              </span>
+            )}
             <span
               className={`rounded-full px-2.5 py-0.5 text-xs font-mono font-bold tracking-wide uppercase border ${panelConfig.badgeClassName}`}
             >
