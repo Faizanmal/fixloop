@@ -19,7 +19,7 @@ interface DiagnosticTimelineProps {
   hasPatchVerified: boolean;
 }
 
-export function DiagnosticTimeline({
+export const DiagnosticTimeline = React.memo(function DiagnosticTimeline({
   diagnosis,
   isInvestigating,
   hasPatchVerified,
@@ -71,7 +71,7 @@ export function DiagnosticTimeline({
   ];
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-8 backdrop-blur">
+    <div className="rounded-xl border border-slate-800 bg-slate-900/90 p-5 mb-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
@@ -79,7 +79,7 @@ export function DiagnosticTimeline({
               STATE MACHINE PROGRESSION
             </span>
             {isInvestigating ? (
-              <Badge variant="warning" className="animate-pulse">
+              <Badge variant="warning">
                 Active Diagnostic Cycle Running...
               </Badge>
             ) : diagnosis ? (
@@ -107,11 +107,11 @@ export function DiagnosticTimeline({
         {steps.map((st) => (
           <div
             key={st.id}
-            className={`flex flex-col justify-between p-3.5 rounded-lg border transition-all ${
+            className={`flex flex-col justify-between p-3.5 rounded-lg border transition-colors ${
               st.completed
                 ? "border-emerald-800/60 bg-emerald-950/20 text-emerald-300 shadow-sm"
                 : st.active
-                ? "border-cyan-500 bg-cyan-950/30 text-cyan-200 animate-pulse ring-1 ring-cyan-500/50"
+                ? "border-cyan-500 bg-cyan-950/30 text-cyan-200 ring-1 ring-cyan-500/50"
                 : "border-slate-800 bg-slate-900/60 text-slate-500"
             }`}
           >
@@ -121,7 +121,7 @@ export function DiagnosticTimeline({
                 {st.completed ? (
                   <Check className="h-4 w-4 text-emerald-400" />
                 ) : st.active ? (
-                  <div className="h-2 w-2 rounded-full bg-cyan-400 animate-ping" />
+                  <div className="h-2 w-2 rounded-full bg-cyan-400" />
                 ) : (
                   <Clock className="h-3.5 w-3.5 text-slate-600" />
                 )}
@@ -200,4 +200,4 @@ export function DiagnosticTimeline({
       )}
     </div>
   );
-}
+});

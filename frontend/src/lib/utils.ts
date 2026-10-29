@@ -5,6 +5,26 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+export const CANONICAL_MODEL_NAME = "NVIDIA-Nemotron-3-Nano-30B-A3B";
+
+export function formatModelName(rawModel?: string | null): string {
+  if (!rawModel) return CANONICAL_MODEL_NAME;
+  const cleaned = rawModel.trim().split("/").pop()?.trim() || "";
+  if (
+    !cleaned ||
+    cleaned.toLowerCase() === "nvidia nemotron-3-nano" ||
+    cleaned.toLowerCase() === "nvidia-nemotron-3-nano"
+  ) {
+    return CANONICAL_MODEL_NAME;
+  }
+  return cleaned;
+}
+
+export function stripTrailingPeriod(text?: string | null): string {
+  if (!text) return "";
+  return text.trim().replace(/\.+$/, "");
+}
+
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(2)}s`;
@@ -98,17 +118,20 @@ export function extractEnvVarInfo(text: string): { varName: string; defaultVal: 
   }
 
   if (!varName) {
-    // 3. Known variable patterns
-    const knownVars = [
-      "REDIS_URL", "DATABASE_URL", "SECRET_KEY", "JWT_SECRET", "API_KEY",
-      "RABBITMQ_URL", "MONGO_URI", "MONGODB_URI", "POSTGRES_URL",
-      "BACKEND_URL", "AUTH_TOKEN", "SESSION_SECRET"
-    ];
-    for (const known of knownVars) {
-      const rx = new RegExp(`\\b${known}\\b`, "i");
-      if (rx.test(text)) {
-        varName = known;
-        break;
+    const isConnRefused = /econnrefused|connection refused/i.test(text);
+    if (!isConnRefused) {
+      // 3. Known variable patterns
+      const knownVars = [
+        "REDIS_URL", "DATABASE_URL", "SECRET_KEY", "JWT_SECRET", "API_KEY",
+        "RABBITMQ_URL", "MONGO_URI", "MONGODB_URI", "POSTGRES_URL",
+        "BACKEND_URL", "AUTH_TOKEN", "SESSION_SECRET"
+      ];
+      for (const known of knownVars) {
+        const rx = new RegExp(`\\b${known}\\b`, "i");
+        if (rx.test(text)) {
+          varName = known;
+          break;
+        }
       }
     }
   }

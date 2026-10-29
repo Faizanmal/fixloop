@@ -50,12 +50,12 @@ export function HypothesesList({
   const runIdToDisplay = runId || diagnosis.investigation_id;
 
   const effectiveStatus =
-    runStatus ||
-    (verificationReport?.status === "verified_fixed"
+    verificationReport?.status === "verified_fixed"
       ? "verified_fixed"
-      : verificationReport?.status === "verification_failed"
+      : verificationReport?.status === "verification_failed" ||
+        verificationReport?.status === "patch_rejected"
       ? "verification_failed"
-      : diagnosis.status);
+      : runStatus || diagnosis.status;
 
   const panelConfig = getStatusPanelConfig(
     effectiveStatus,
@@ -93,7 +93,7 @@ export function HypothesesList({
                 <span>Lookup: {formatDuration(lookupDurationMs || durationMs || 5)}</span>
                 <span className="text-slate-500 mx-1">·</span>
                 <span className="text-cyan-300 font-semibold">
-                  Original Compute: {formatDuration(originalDurationMs || diagnosis.original_duration_ms || 12010)}
+                  Original Compute: {formatDuration(originalDurationMs || diagnosis.original_duration_ms || durationMs || 0)}
                 </span>
               </span>
             ) : typeof durationMs === "number" && durationMs > 0 ? (
@@ -130,7 +130,11 @@ export function HypothesesList({
                 {confidencePct}%
               </span>
               <span className="text-xs text-slate-400 font-normal">
-                {panelConfig.isConclusive ? "(Conclusive)" : "(High Uncertainty)"}
+                {panelConfig.isVerificationFailed
+                  ? "(Verification Failed)"
+                  : panelConfig.isConclusive
+                  ? "(Conclusive)"
+                  : "(High Uncertainty)"}
               </span>
             </div>
           </div>
@@ -363,6 +367,13 @@ export function HypothesesList({
                   <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
                   <span className="text-emerald-300 font-semibold">
                     Verified fixed in sandbox. Ready for production review.
+                  </span>
+                </>
+              ) : panelConfig.isVerificationFailed ? (
+                <>
+                  <XCircle className="h-4 w-4 text-rose-400 shrink-0" />
+                  <span className="text-rose-300 font-semibold">
+                    Sandbox verification rejected patch: candidate fix does not resolve the diagnosed failure.
                   </span>
                 </>
               ) : panelConfig.isConclusive ? (

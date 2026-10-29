@@ -57,6 +57,8 @@ docker-volumes/
 tmp/
 scratch/
 .temp/
+.fixloop_state.json
+backend/.fixloop_state.json
 
 # IDE & OS
 .vscode/

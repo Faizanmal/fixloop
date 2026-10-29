@@ -12,7 +12,7 @@ interface RecentInvestigationsProps {
   isLoadingInspect?: boolean;
 }
 
-export function RecentInvestigations({
+export const RecentInvestigations = React.memo(function RecentInvestigations({
   history,
   onSelectHistoryItem,
   activeInspectId,
@@ -22,7 +22,7 @@ export function RecentInvestigations({
 
   if (history.length === 0) {
     return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-6 text-center backdrop-blur mb-8">
+      <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6 text-center mb-8">
         <History className="h-6 w-6 text-slate-500 mx-auto mb-2" />
         <h4 className="text-sm font-semibold text-slate-300 font-mono">
           No Investigations Recorded Yet
@@ -57,7 +57,7 @@ export function RecentInvestigations({
   });
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 shadow-sm backdrop-blur mb-8">
+    <div className="rounded-xl border border-slate-800 bg-slate-900/90 p-5 shadow-sm mb-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
@@ -198,4 +198,4 @@ export function RecentInvestigations({
       </div>
     </div>
   );
-}
+});

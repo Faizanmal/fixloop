@@ -2,6 +2,7 @@
 
 import React from "react";
 import { SystemReadiness, ScenarioInfo } from "@/lib/api";
+import { formatModelName } from "@/lib/utils";
 import {
   Server,
   ShieldCheck,
@@ -91,8 +92,8 @@ export function ProjectHealthSummary({
             <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
           )}
         </div>
-        <p className="mt-1 text-xs text-slate-400 leading-relaxed truncate" title={nebiusInfo?.model || "NVIDIA Nemotron"}>
-          {nebiusInfo?.model ? nebiusInfo.model.split("/").pop() : "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B"}
+        <p className="mt-1 text-xs text-slate-400 leading-relaxed truncate" title={formatModelName(nebiusInfo?.model)}>
+          {formatModelName(nebiusInfo?.model)}
         </p>
       </div>
 

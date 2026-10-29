@@ -422,7 +422,7 @@ async def test_custom_log_redis_keyerror_patch_proposal():
         assert "redis://" in patch_data["diff_unified"]
         assert "REDIS_URL" in patch_data["explanation"]
 
-        # Step 3: Verify sandbox verification report also uses REDIS_URL
+        # Verify sandbox verification report also uses REDIS_URL and passes
         verify_resp = await client.post(
             "/api/v1/verify",
             json={
@@ -433,8 +433,102 @@ async def test_custom_log_redis_keyerror_patch_proposal():
         )
         assert verify_resp.status_code == 200
         verify_data = verify_resp.json()
+        assert verify_data["status"] == "verified_fixed"
         assert "REDIS_URL" in verify_data["patch_diff"]
         assert "DATABASE_URL" not in verify_data["patch_diff"]
+        assert not verify_data["expected_criteria"].endswith(".")
+        assert ".." not in verify_data["test_output"]
+
+
+@pytest.mark.asyncio
+async def test_orders_api_econnrefused_postgres_rejects_wrong_port_mapping_patch():
+    """Verify orders-api ECONNREFUSED 127.0.0.1:5432 gets 96% Postgres diagnosis, and sandbox verification REJECTS the 8000:5000 -> 8000:8000 port-mapping patch."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        diag_resp = await client.post(
+            "/api/v1/diagnose",
+            json={
+                "service_name": "orders-api",
+                "logs": "Error: connect ECONNREFUSED 127.0.0.1:5432\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1555:16)\nFATAL: PostgreSQL connection failed on 127.0.0.1:5432",
+            }
+        )
+        assert diag_resp.status_code == 200
+        diag_data = diag_resp.json()
+        assert diag_data["status"] == "diagnosis_available"
+        assert diag_data["confidence"] >= 0.90
+        inv_id = diag_data["investigation_id"]
+        assert inv_id is not None
+
+        # Verify that running sandbox verification on the fallback port-mapping patch FAILS verification
+        verify_resp = await client.post(
+            "/api/v1/verify",
+            json={
+                "scenario_name": "orders-api",
+                "investigation_id": inv_id,
+                "user_approved": True,
+            }
+        )
+        assert verify_resp.status_code == 200
+        verify_data = verify_resp.json()
+        assert verify_data["status"] == "verification_failed"
+        assert verify_data["failure_evidence"] is not None
+        assert "does not resolve" in verify_data["failure_evidence"] or "does not address" in verify_data["failure_evidence"]
+
+        # Check /investigations record reflects FAILED_FIX, not VERIFIED_FIX
+        inv_res = await client.get(f"/investigations/{inv_id}")
+        assert inv_res.status_code == 200
+        inv_state = inv_res.json()
+        assert inv_state["outcome"] == "FAILED_FIX"
+        assert inv_state["verification_report"]["status"] == "verification_failed"
+
+
+@pytest.mark.asyncio
+async def test_cached_scenario_a_preserves_exact_first_run_compute_duration(tmp_path):
+    """Verify cached Scenario A reports the exact original_duration_ms from the first run, never overwriting with 12010ms."""
+    from backend.app.api.routes import (
+        DIAGNOSTIC_CACHE,
+        INVESTIGATIONS_DB,
+        INVESTIGATION_DIAGNOSES,
+        get_diagnostic_cache_key,
+        _save_persisted_state,
+        _load_persisted_state,
+    )
+
+    DIAGNOSTIC_CACHE.clear()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp1 = await client.post(
+            "/api/v1/diagnose",
+            json={"service_name": "scenario_a_missing_env", "idempotency_key": f"exact-dur-1-{time.time()}"}
+        )
+        assert resp1.status_code == 200
+        data1 = resp1.json()
+        first_run_ms = data1["duration_ms"]
+        assert first_run_ms != 12010
+
+        resp2 = await client.post(
+            "/api/v1/diagnose",
+            json={"service_name": "scenario_a_missing_env", "idempotency_key": f"exact-dur-2-{time.time()}"}
+        )
+        assert resp2.status_code == 200
+        data2 = resp2.json()
+        assert data2["is_cached"] is True
+        assert data2["original_duration_ms"] == first_run_ms
+
+        # Also verify state persistence round-trip
+        state_file = tmp_path / ".fixloop_state.json"
+        _save_persisted_state(state_file=state_file)
+        assert state_file.exists()
+
+        saved_inv_id = data1["investigation_id"]
+        cache_key = get_diagnostic_cache_key("scenario_a_missing_env")
+        INVESTIGATIONS_DB.clear()
+        INVESTIGATION_DIAGNOSES.clear()
+        DIAGNOSTIC_CACHE.clear()
+
+        _load_persisted_state(state_file=state_file)
+        assert saved_inv_id in INVESTIGATIONS_DB
+        assert saved_inv_id in INVESTIGATION_DIAGNOSES
+        assert DIAGNOSTIC_CACHE[cache_key]["original_duration_ms"] == first_run_ms
+
 
 
 

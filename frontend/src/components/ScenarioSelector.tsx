@@ -69,7 +69,7 @@ function ActiveDiagnosticProgress({ onCancel, onRetry }: ActiveDiagnosticProgres
       </div>
 
       {seconds >= 90 && (
-        <div className="rounded-lg border border-amber-500/50 bg-amber-950/40 p-4 text-xs font-mono text-amber-200 backdrop-blur animate-in fade-in">
+        <div className="rounded-lg border border-amber-500/50 bg-amber-950/60 p-4 text-xs font-mono text-amber-200 animate-in fade-in">
           <div className="flex items-start gap-2.5">
             <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
             <div className="flex-1">
@@ -104,7 +104,7 @@ function ActiveDiagnosticProgress({ onCancel, onRetry }: ActiveDiagnosticProgres
   );
 }
 
-export function ScenarioSelector({
+export const ScenarioSelector = React.memo(function ScenarioSelector({
   scenarios,
   selectedScenario,
   onSelectScenario,
@@ -235,76 +235,89 @@ export function ScenarioSelector({
 
       {/* Preset Scenarios Grid */}
       {activeTab === "scenarios" ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {scenarios.map((sc) => {
-            const isSelected = selectedScenario === sc.id;
-            const IconComponent = getScenarioIcon(sc.id);
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {scenarios.map((sc) => {
+              const isSelected = selectedScenario === sc.id;
+              const IconComponent = getScenarioIcon(sc.id);
 
-            return (
-              <div
-                key={sc.id}
-                onClick={() => onSelectScenario(sc.id)}
-                className={`relative flex flex-col justify-between rounded-xl border p-4 cursor-pointer transition-all duration-200 select-none ${
-                  isSelected
-                    ? "border-cyan-500 bg-cyan-950/25 ring-1 ring-cyan-500/50 shadow-md shadow-cyan-950/40"
-                    : "border-slate-800 bg-slate-900/50 hover:border-slate-700 hover:bg-slate-900/80"
-                }`}
-              >
-                <div>
-                  <div className="flex items-start justify-between gap-2 mb-3">
-                    <div
-                      className={`flex h-9 w-9 items-center justify-center rounded-lg ring-1 ${
-                        isSelected
-                          ? "bg-cyan-500/20 text-cyan-300 ring-cyan-500/40"
-                          : "bg-slate-800 text-slate-400 ring-slate-700"
+              return (
+                <div
+                  key={sc.id}
+                  onClick={() => onSelectScenario(sc.id)}
+                  className={`relative flex flex-col justify-between rounded-xl border p-4 cursor-pointer transition-colors duration-150 select-none ${
+                    isSelected
+                      ? "border-cyan-500 bg-cyan-950/25 ring-1 ring-cyan-500/50 shadow-md shadow-cyan-950/40"
+                      : "border-slate-800 bg-slate-900/50 hover:border-slate-700 hover:bg-slate-900/80"
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-start justify-between gap-2 mb-3">
+                      <div
+                        className={`flex h-9 w-9 items-center justify-center rounded-lg ring-1 ${
+                          isSelected
+                            ? "bg-cyan-500/20 text-cyan-300 ring-cyan-500/40"
+                            : "bg-slate-800 text-slate-400 ring-slate-700"
+                        }`}
+                      >
+                        <IconComponent className="h-5 w-5" />
+                      </div>
+                      <div className="flex flex-col items-end gap-1">
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold ${getDifficultyBadge(
+                            sc.difficulty
+                          )}`}
+                        >
+                          {sc.difficulty}
+                        </span>
+                        {sc.requires_probe && (
+                          <span className="rounded-full bg-cyan-500/10 border border-cyan-500/30 px-1.5 py-0.2 text-[9px] font-mono text-cyan-400 font-medium">
+                            Active Probe
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <h3
+                      className={`text-sm font-semibold mb-1 leading-snug ${
+                        isSelected ? "text-cyan-200" : "text-slate-200"
                       }`}
                     >
-                      <IconComponent className="h-5 w-5" />
-                    </div>
-                    <div className="flex flex-col items-end gap-1">
-                      <span
-                        className={`rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold ${getDifficultyBadge(
-                          sc.difficulty
-                        )}`}
-                      >
-                        {sc.difficulty}
-                      </span>
-                      {sc.requires_probe && (
-                        <span className="rounded-full bg-cyan-500/10 border border-cyan-500/30 px-1.5 py-0.2 text-[9px] font-mono text-cyan-400 font-medium">
-                          Active Probe
-                        </span>
-                      )}
-                    </div>
+                      {sc.name.split(":")[0]}
+                    </h3>
+                    <p className="text-xs text-slate-400 leading-relaxed mb-4 line-clamp-3">
+                      {sc.description}
+                    </p>
                   </div>
 
-                  <h3
-                    className={`text-sm font-semibold mb-1 leading-snug ${
-                      isSelected ? "text-cyan-200" : "text-slate-200"
-                    }`}
-                  >
-                    {sc.name.split(":")[0]}
-                  </h3>
-                  <p className="text-xs text-slate-400 leading-relaxed mb-4 line-clamp-3">
-                    {sc.description}
-                  </p>
+                  <div className="flex items-center justify-between pt-2.5 border-t border-slate-800/80 text-[11px] font-mono">
+                    <span className="text-slate-500">
+                      {sc.id.replace("scenario_", "SC-")}
+                    </span>
+                    <span
+                      className={`inline-flex items-center gap-1 font-semibold ${
+                        isSelected ? "text-cyan-400" : "text-slate-400"
+                      }`}
+                    >
+                      {isSelected ? "Active Target" : "Select Target"}
+                      <ArrowRight className="h-3 w-3" />
+                    </span>
+                  </div>
                 </div>
-
-                <div className="flex items-center justify-between pt-2.5 border-t border-slate-800/80 text-[11px] font-mono">
-                  <span className="text-slate-500">
-                    {sc.id.replace("scenario_", "SC-")}
-                  </span>
-                  <span
-                    className={`inline-flex items-center gap-1 font-semibold ${
-                      isSelected ? "text-cyan-400" : "text-slate-400"
-                    }`}
-                  >
-                    {isSelected ? "Active Target" : "Select Target"}
-                    <ArrowRight className="h-3 w-3" />
-                  </span>
-                </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+          {isInvestigating && (
+            <ActiveDiagnosticProgress
+              onCancel={() => onCancelInvestigation?.()}
+              onRetry={() => {
+                onCancelInvestigation?.();
+                setTimeout(() => {
+                  onStartInvestigation();
+                }, 150);
+              }}
+            />
+          )}
         </div>
       ) : (
         /* Custom Logs Ingestion Form */
@@ -377,4 +390,4 @@ export function ScenarioSelector({
       )}
     </div>
   );
-}
+});

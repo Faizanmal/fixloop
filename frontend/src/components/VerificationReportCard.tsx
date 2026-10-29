@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { VerificationReport, apiClient } from "@/lib/api";
-import { formatDuration, getStatusColor } from "@/lib/utils";
+import { CANONICAL_MODEL_NAME, formatDuration, getStatusColor, stripTrailingPeriod } from "@/lib/utils";
 import {
   ShieldCheck,
   CheckCircle2,
@@ -99,7 +99,7 @@ ${report.test_output}
 ${report.patch_diff || "No diff content"}
 \`\`\`
 
-*Report generated automatically by FixLoop Autonomous SRE Engine powered by Nebius Token Factory & NVIDIA Nemotron-3-Nano.*
+*Report generated automatically by FixLoop Autonomous SRE Engine powered by Nebius Token Factory & ${CANONICAL_MODEL_NAME}.*
 `;
     const blob = new Blob([reportMd], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
@@ -225,7 +225,7 @@ ${report.patch_diff || "No diff content"}
           </div>
           <p className="text-xs text-slate-300 leading-relaxed font-mono">
             {report.expected_criteria
-              ? `Original state failed: ${report.expected_criteria} was missing or misconfigured in target repository.`
+              ? `Original state failed: ${stripTrailingPeriod(report.expected_criteria)} was missing or misconfigured in target repository.`
               : "Active system failure detected during diagnostic phase."}
           </p>
         </div>
@@ -269,8 +269,8 @@ ${report.patch_diff || "No diff content"}
           </div>
           <p className="text-xs text-slate-300 leading-relaxed font-mono">
             {isFixed
-              ? `Success: ${report.expected_criteria}. Container restarted cleanly in isolated sandbox.`
-              : report.test_output || "Verification checks failed or were not attempted."}
+              ? `Success: ${stripTrailingPeriod(report.expected_criteria)}. Container restarted cleanly in isolated sandbox.`
+              : report.failure_evidence || report.test_output || "Verification checks failed or were not attempted."}
           </p>
         </div>
       </div>

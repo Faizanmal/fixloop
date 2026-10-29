@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import { SystemReadiness } from "@/lib/api";
+import { formatModelName } from "@/lib/utils";
 import {
   ShieldAlert,
   Cpu,
@@ -31,9 +32,7 @@ export function Navbar({
   const dockerInfo = readiness?.docker;
   const isDockerUp = dockerInfo?.available ?? false;
 
-  const modelDisplay = nebiusInfo?.model
-    ? nebiusInfo.model.split("/").pop()
-    : "NVIDIA-Nemotron-3-Nano";
+  const modelDisplay = formatModelName(nebiusInfo?.model);
 
   return (
     <header className="sticky top-0 z-50 border-b border-slate-800 bg-[#090d16]/95 backdrop-blur-md">
@@ -66,11 +65,11 @@ export function Navbar({
           {/* Target Model Badge */}
           <div
             className="hidden lg:flex items-center gap-2 rounded-lg bg-slate-900/90 px-2.5 py-1.5 text-xs text-slate-300 ring-1 ring-slate-800"
-            title={`Nebius Model: ${nebiusInfo?.model || "NVIDIA Nemotron"}`}
+            title={`Nebius Model: ${modelDisplay}`}
           >
             <Cpu className="h-3.5 w-3.5 text-indigo-400" />
             <span className="font-mono text-[11px] text-slate-400">Model:</span>
-            <span className="font-mono text-[11px] text-indigo-300 font-medium truncate max-w-[160px]">
+            <span className="font-mono text-[11px] text-indigo-300 font-medium truncate max-w-[240px]">
               {modelDisplay}
             </span>
           </div>

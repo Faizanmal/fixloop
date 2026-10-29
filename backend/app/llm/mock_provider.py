@@ -314,6 +314,50 @@ class MockLLMProvider:
                 next_action="Align healthcheck probe test endpoint in docker-compose.yml with application route"
             )
 
+        # 2.5. Database / Local Service ECONNREFUSED Check (e.g., orders-api ECONNREFUSED 127.0.0.1:5432)
+        if ("econnrefused" in context_str or "connection refused" in context_str) and not has_healthcheck_clue:
+            evidence_snippet = next(
+                (line.strip() for line in logs.splitlines() if any(k in line.lower() for k in ["econnrefused", "refused", "5432", "postgres", "redis"])),
+                "connect ECONNREFUSED 127.0.0.1:5432",
+            )
+            is_pg = "5432" in context_str or "postgres" in context_str or "pg" in context_str
+            db_label = "PostgreSQL database" if is_pg else "Downstream service"
+            target_ep = "127.0.0.1:5432" if "5432" in context_str else "target endpoint"
+            return DiagnoseResponse(
+                status=DiagnosisStatus.DIAGNOSIS_AVAILABLE,
+                summary=f"Connection refused for '{service_name}': {db_label} at {target_ep} is not running or not reachable from the container network.",
+                hypotheses=[
+                    DiagnoseHypothesis(
+                        description=f"{db_label} is not running or not reachable at {target_ep} (ECONNREFUSED)",
+                        supporting_evidence=[
+                            f"application_logs: {evidence_snippet}",
+                        ],
+                        contradicting_evidence=[],
+                        confidence=0.96,
+                        recommended_discriminating_test=f"TCP_CONNECT {target_ep}",
+                    )
+                ],
+                evidence=[
+                    EvidenceRecord(
+                        id="ev-conn-1",
+                        source="application_logs",
+                        content=evidence_snippet,
+                    )
+                ],
+                recommended_tests=[
+                    RecommendTest(
+                        id="test-conn-1",
+                        test_type="TCP_CONNECT",
+                        target=target_ep,
+                        description=f"Verify whether {db_label} is listening and reachable on {target_ep}",
+                        expected_signal="TCP connection established",
+                    )
+                ],
+                missing_information=[],
+                confidence=0.96,
+                next_action=f"Ensure {db_label} container is running and configure host/network connectivity instead of loopback 127.0.0.1",
+            )
+
         # 3. External Outage / Upstream Timeout Check
         if "external" in context_str or "upstream" in context_str or ("timeout" in context_str and "health" not in context_str and "port" not in context_str):
             evidence_snippet = next((line.strip() for line in logs.splitlines() if any(k in line.lower() for k in ["timeout", "gateway", "reset", "upstream"])), "Connection timeout to external gateway")

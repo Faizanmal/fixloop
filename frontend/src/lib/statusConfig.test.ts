@@ -1,7 +1,7 @@
 import assert from "node:assert";
 import test from "node:test";
 import { getStatusPanelConfig, type VerificationReportLike } from "./statusConfig";
-import { extractEnvVarInfo } from "./utils";
+import { CANONICAL_MODEL_NAME, extractEnvVarInfo, formatModelName, stripTrailingPeriod } from "./utils";
 
 test("verified_fixed status yields verified badge and next step to review/apply patch", () => {
   const dummyReport: VerificationReportLike = {
@@ -125,5 +125,33 @@ test("extractEnvVarInfo handles security and port tokens", () => {
 
   const portMismatch = extractEnvVarInfo("Port forwarding target mismatch on port 8000");
   assert.strictEqual(portMismatch, null);
+
+  const ordersConnRefused = extractEnvVarInfo(
+    "orders-api Error: connect ECONNREFUSED 127.0.0.1:5432 PostgreSQL database not running or not reachable"
+  );
+  assert.strictEqual(ordersConnRefused, null);
 });
+
+test("verified_fixed detailMessage and stripTrailingPeriod never produce doubled periods (..)", () => {
+  const reportWithTrailingDot: VerificationReportLike = {
+    status: "verified_fixed",
+    test_output: "Isolated sandbox container returned exit code 0 and passed all verification checks.",
+  };
+  const config = getStatusPanelConfig("verified_fixed", reportWithTrailingDot, 0.96);
+  assert.ok(config.detailMessage);
+  assert.ok(!config.detailMessage.includes(".."), `Found doubled period in: ${config.detailMessage}`);
+  assert.strictEqual(
+    stripTrailingPeriod("Container starts with exit code 0 and health probe passes."),
+    "Container starts with exit code 0 and health probe passes"
+  );
+});
+
+test("formatModelName normalizes all model name variants into a single canonical form", () => {
+  assert.strictEqual(formatModelName(undefined), CANONICAL_MODEL_NAME);
+  assert.strictEqual(formatModelName(null), CANONICAL_MODEL_NAME);
+  assert.strictEqual(formatModelName("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B"), CANONICAL_MODEL_NAME);
+  assert.strictEqual(formatModelName("NVIDIA-Nemotron-3-Nano-30B-A3B"), CANONICAL_MODEL_NAME);
+  assert.strictEqual(formatModelName("NVIDIA Nemotron-3-Nano"), CANONICAL_MODEL_NAME);
+});
+
 

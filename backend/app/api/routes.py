@@ -5,6 +5,9 @@ Guarantees secret safety and actionable error feedback.
 """
 
 import hashlib
+import json
+import os
+import sys
 import time
 import shutil
 import subprocess
@@ -34,6 +37,7 @@ from backend.app.agent.patcher import (
     ControlledPatchGenerator,
     InsufficientEvidenceError,
     extract_env_var_info,
+    evaluate_custom_patch_alignment,
 )
 from backend.app.sandbox.verifier import ControlledVerificationPipeline, VerificationReport
 from backend.app.llm.client import NebiusLLMClient
@@ -51,11 +55,76 @@ from backend.app.llm.exceptions import (
 
 router = APIRouter()
 
-# In-memory store for investigation runs & diagnoses
+# In-memory store for investigation runs & diagnoses (backed by disk persistence)
 INVESTIGATIONS_DB: Dict[str, InvestigationState] = {}
 INVESTIGATION_DIAGNOSES: Dict[str, DiagnoseResponse] = {}
 IDEMPOTENCY_STORE: Dict[str, Any] = {}
 DIAGNOSTIC_CACHE: Dict[str, Dict[str, Any]] = {}
+
+_STATE_FILE_PATH = Path(__file__).resolve().parent.parent.parent / ".fixloop_state.json"
+_DOCKER_STATUS_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
+_READINESS_STATUS_CACHE: Dict[str, Any] = {"ts": 0.0, "key": None, "data": None}
+
+
+def _is_test_session() -> bool:
+    return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
+
+
+def _save_persisted_state(state_file: Optional[Path] = None) -> None:
+    """Persists investigation history, diagnoses, and cache to disk so runs survive reloads."""
+    target_path = state_file or _STATE_FILE_PATH
+    if state_file is None and _is_test_session():
+        return
+    try:
+        payload = {
+            "investigations": {
+                k: v.model_dump(mode="json") for k, v in INVESTIGATIONS_DB.items()
+            },
+            "diagnoses": {
+                k: v.model_dump(mode="json") for k, v in INVESTIGATION_DIAGNOSES.items()
+            },
+            "diagnostic_cache": {
+                k: {
+                    "response": entry["response"].model_dump(mode="json"),
+                    "original_duration_ms": entry.get("original_duration_ms"),
+                }
+                for k, entry in DIAGNOSTIC_CACHE.items()
+                if isinstance(entry, dict) and "response" in entry
+            },
+        }
+        target_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _load_persisted_state(state_file: Optional[Path] = None) -> None:
+    """Restores persisted investigation runs and cache from disk."""
+    target_path = state_file or _STATE_FILE_PATH
+    if not target_path.exists():
+        return
+    try:
+        raw = json.loads(target_path.read_text(encoding="utf-8"))
+        for k, v in (raw.get("diagnoses") or {}).items():
+            INVESTIGATION_DIAGNOSES[k] = DiagnoseResponse.model_validate(v)
+        for k, v in (raw.get("investigations") or {}).items():
+            inv = InvestigationState.model_validate(v)
+            if inv.diagnosis and isinstance(inv.diagnosis, dict):
+                inv.diagnosis = DiagnoseResponse.model_validate(inv.diagnosis)
+            if inv.verification_report and isinstance(inv.verification_report, dict):
+                inv.verification_report = VerificationReport.model_validate(inv.verification_report)
+            INVESTIGATIONS_DB[k] = inv
+        for k, entry in (raw.get("diagnostic_cache") or {}).items():
+            if isinstance(entry, dict) and "response" in entry:
+                DIAGNOSTIC_CACHE[k] = {
+                    "response": DiagnoseResponse.model_validate(entry["response"]),
+                    "original_duration_ms": entry.get("original_duration_ms"),
+                }
+    except Exception:
+        pass
+
+
+if not _is_test_session():
+    _load_persisted_state()
 
 PRESET_BASELINE_COMPUTE_MS: Dict[str, int] = {
     "scenario_a_missing_env": 12010,
@@ -166,49 +235,67 @@ def get_scenario_dir(name: str) -> Path | None:
 
 
 def check_docker_daemon() -> Dict[str, Any]:
-    """Inspects Docker daemon availability safely."""
+    """Inspects Docker daemon availability safely with 30s TTL caching to avoid blocking event loop."""
+    now = time.monotonic()
+    if _DOCKER_STATUS_CACHE["data"] is not None and (now - _DOCKER_STATUS_CACHE["ts"]) < 30.0:
+        return _DOCKER_STATUS_CACHE["data"]
+
     docker_cli = shutil.which("docker")
     if not docker_cli:
-        return {
+        res = {
             "available": False,
             "mode": "file_check",
             "reason": "Sandbox: file-check mode",
             "display": "Sandbox: file-check mode",
         }
+        _DOCKER_STATUS_CACHE["ts"] = now
+        _DOCKER_STATUS_CACHE["data"] = res
+        return res
     try:
         proc = subprocess.run(
             ["docker", "info", "--format", "{{.ServerVersion}}"],
             capture_output=True,
             text=True,
-            timeout=3,
+            timeout=2,
         )
         if proc.returncode == 0:
-            return {
+            res = {
                 "available": True,
                 "mode": "docker",
                 "server_version": proc.stdout.strip(),
                 "display": "Docker Live",
             }
         else:
-            return {
+            res = {
                 "available": False,
                 "mode": "file_check",
                 "reason": "Sandbox: file-check mode",
                 "display": "Sandbox: file-check mode",
             }
-    except Exception as exc:
-        return {
+    except Exception:
+        res = {
             "available": False,
             "mode": "file_check",
             "reason": "Sandbox: file-check mode",
             "display": "Sandbox: file-check mode",
         }
+    _DOCKER_STATUS_CACHE["ts"] = now
+    _DOCKER_STATUS_CACHE["data"] = res
+    return res
 
 
 async def get_readiness_status() -> Dict[str, Any]:
     """Evaluates readiness of application configuration and verifies Nebius connectivity without exposing secrets."""
     is_key_configured = settings.is_nebius_configured
     is_mock = settings.USE_MOCK_LLM or not is_key_configured
+    cache_sig = (is_key_configured, is_mock, settings.NEBIUS_MODEL, settings.normalized_nebius_base_url)
+    now = time.monotonic()
+    if (
+        _READINESS_STATUS_CACHE["data"] is not None
+        and _READINESS_STATUS_CACHE["key"] == cache_sig
+        and (now - _READINESS_STATUS_CACHE["ts"]) < 30.0
+    ):
+        return _READINESS_STATUS_CACHE["data"]
 
     issues = []
     if not is_key_configured and not settings.USE_MOCK_LLM:
@@ -225,7 +312,7 @@ async def get_readiness_status() -> Dict[str, Any]:
 
     is_ready = (is_key_configured or settings.USE_MOCK_LLM) and verification.get("verified", False)
 
-    return {
+    res = {
         "ready": is_ready,
         "service": "fixloop",
         "nebius": {
@@ -237,6 +324,10 @@ async def get_readiness_status() -> Dict[str, Any]:
         },
         "issues": issues,
     }
+    _READINESS_STATUS_CACHE["ts"] = now
+    _READINESS_STATUS_CACHE["key"] = cache_sig
+    _READINESS_STATUS_CACHE["data"] = res
+    return res
 
 
 # =========================================================================
@@ -339,6 +430,7 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
         INVESTIGATIONS_DB[inv_id] = inv_state
         if request.idempotency_key:
             IDEMPOTENCY_STORE[request.idempotency_key] = (cached_resp, inv_state)
+        _save_persisted_state()
         return cached_resp
 
     # 1. If service_name maps to a local scenario fixture directory, run DiagnosticEngine
@@ -400,13 +492,12 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
         if request.idempotency_key:
             IDEMPOTENCY_STORE[request.idempotency_key] = (diag_resp, inv_state)
 
-        # Cache initial diagnostic result with authoritative baseline or measured duration
-        resolved_s = SCENARIO_ALIASES.get(request.service_name or "", request.service_name or "")
-        orig_comp = max(elapsed_ms, PRESET_BASELINE_COMPUTE_MS.get(resolved_s, elapsed_ms))
+        # Cache initial diagnostic result using the exact measured duration of the original run
         DIAGNOSTIC_CACHE[cache_key] = {
             "response": diag_resp,
-            "original_duration_ms": orig_comp,
+            "original_duration_ms": elapsed_ms,
         }
+        _save_persisted_state()
         return diag_resp
 
     # 2. Input validation for ad-hoc requests
@@ -508,6 +599,7 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             "response": diagnosis,
             "original_duration_ms": elapsed_ms,
         }
+        _save_persisted_state()
         return diagnosis
     except NebiusAuthenticationError as exc:
         raise HTTPException(
@@ -584,11 +676,13 @@ async def verify_patch(request: VerifyPatchRequest) -> VerificationReport:
             target_inv.duration_ms = base_duration + duration_delta_ms
             target_inv.verification_report = rep
             target_inv.updated_at = utc_now()
+            _save_persisted_state()
 
     scenario_dir = get_scenario_dir(request.scenario_name)
     if not scenario_dir:
         # Check if matching investigation or diagnosis exists for this service or ad-hoc target
         context_parts = [request.scenario_name]
+        raw_logs_parts: List[str] = []
         if request.investigation_id:
             context_parts.append(request.investigation_id)
 
@@ -600,6 +694,7 @@ async def verify_patch(request: VerifyPatchRequest) -> VerificationReport:
                 for h in d.hypotheses:
                     context_parts.extend(h.supporting_evidence)
                 context_parts.extend(e.content for e in d.evidence)
+                raw_logs_parts.extend(e.content for e in d.evidence)
 
         target_inv_for_context = None
         if request.investigation_id and request.investigation_id in INVESTIGATIONS_DB:
@@ -618,6 +713,7 @@ async def verify_patch(request: VerifyPatchRequest) -> VerificationReport:
             for ev in target_inv_for_context.evidence_store:
                 if hasattr(ev, "content") and ev.content:
                     context_parts.append(ev.content)
+                    raw_logs_parts.append(ev.content)
             for h in target_inv_for_context.hypotheses:
                 if hasattr(h, "description") and h.description:
                     context_parts.append(h.description)
@@ -625,57 +721,37 @@ async def verify_patch(request: VerifyPatchRequest) -> VerificationReport:
                     context_parts.extend(h.supporting_evidence)
 
         full_context = " ".join(context_parts)
-        extracted_var, extracted_val = extract_env_var_info(full_context)
+        raw_logs = " ".join(raw_logs_parts)
+        alignment = evaluate_custom_patch_alignment(
+            full_context=full_context,
+            raw_logs=raw_logs,
+            scenario_name=request.scenario_name,
+        )
 
-        if extracted_var or "database_url" in full_context.lower() or "scenario_a" in full_context.lower():
-            effective_var = extracted_var or "DATABASE_URL"
-            effective_val = extracted_val or "postgresql://app_user:app_pass@localhost:5432/app_db"
-            diff = (
-                "--- a/docker-compose.yml\n"
-                "+++ b/docker-compose.yml\n"
-                "@@ -7,6 +7,7 @@\n"
-                "     ports:\n"
-                "       - \"8080:8080\"\n"
-                "     environment:\n"
-                f"+      - {effective_var}={effective_val}\n"
-                "       - PORT=8080\n"
-                "       - LOG_LEVEL=debug\n"
-            )
-        elif "health" in full_context.lower() or "healthcheck" in full_context.lower() or "scenario_b" in full_context.lower():
-            diff = (
-                "--- a/docker-compose.yml\n"
-                "+++ b/docker-compose.yml\n"
-                "@@ -10,3 +10,3 @@\n"
-                "     healthcheck:\n"
-                "-      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8000/health\"]\n"
-                "+      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8000/healthz\"]\n"
-            )
-        elif "rate_limit" in full_context.lower() or "main.py" in full_context.lower() or "scenario_g" in full_context.lower():
-            diff = (
-                "--- a/main.py\n"
-                "+++ b/main.py\n"
-                "@@ -12,2 +12,2 @@\n"
-                "-RATE_LIMIT_BURST = \"unparsed_string\"\n"
-                "+RATE_LIMIT_BURST = 100\n"
+        verify_elapsed = max(20, int((time.perf_counter() - verify_start) * 1000))
+        if alignment["is_aligned"]:
+            report = VerificationReport(
+                status=VerificationStatus.VERIFIED_FIXED,
+                patch_id=alignment["patch_id"],
+                target_file=alignment["target_file"],
+                test_output=alignment["test_output"],
+                expected_criteria=alignment["expected_criteria"],
+                patch_diff=alignment["diff_unified"],
+                duration_ms=verify_elapsed,
+                reverted=True,
             )
         else:
-            diff = (
-                "--- a/docker-compose.yml\n"
-                "+++ b/docker-compose.yml\n"
-                "@@ -8,2 +8,2 @@\n"
-                "     ports:\n"
-                "-      - \"8000:5000\"\n"
-                "+      - \"8000:8000\"\n"
+            report = VerificationReport(
+                status=VerificationStatus.VERIFICATION_FAILED,
+                patch_id=alignment["patch_id"],
+                target_file=alignment["target_file"],
+                test_output=alignment["test_output"],
+                expected_criteria=alignment["expected_criteria"],
+                failure_evidence=alignment["failure_evidence"],
+                patch_diff=alignment["diff_unified"],
+                duration_ms=verify_elapsed,
+                reverted=True,
             )
-        verify_elapsed = max(20, int((time.perf_counter() - verify_start) * 1000))
-        report = VerificationReport(
-            status=VerificationStatus.VERIFIED_FIXED,
-            test_output=f"All verification criteria satisfied for {request.scenario_name}. Container environment passed readiness checks.",
-            expected_criteria="Isolated sandbox container returns exit code 0 and health probe passes.",
-            patch_diff=diff,
-            duration_ms=verify_elapsed,
-            reverted=True,
-        )
         update_matching_investigation(report, verify_elapsed)
         return report
 
@@ -688,7 +764,7 @@ async def verify_patch(request: VerifyPatchRequest) -> VerificationReport:
         verify_elapsed = max(10, int((time.perf_counter() - verify_start) * 1000))
         report = VerificationReport(
             status=VerificationStatus.NOT_ATTEMPTED,
-            test_output=f"Verification not attempted: diagnosis status is '{diag_result.status.value}' with confidence {diag_result.confidence:.2f} (>= 0.90 required).",
+            test_output=f"Verification not attempted: diagnosis status is '{diag_result.status.value}' with confidence {diag_result.confidence:.2f} (>= 0.90 required)",
             expected_criteria="Conclusive empirical evidence (confidence >= 0.90)",
             duration_ms=verify_elapsed,
             reverted=True,
@@ -745,6 +821,7 @@ async def propose_patch(scenario_name: str) -> PatchProposal:
 
     # If scenario_dir is not found, check if it's an ad-hoc custom log run, investigation id, or custom service name
     context_parts = [scenario_name]
+    raw_logs_parts: List[str] = []
     if scenario_name in INVESTIGATION_DIAGNOSES:
         d = INVESTIGATION_DIAGNOSES[scenario_name]
         context_parts.append(d.summary)
@@ -752,6 +829,7 @@ async def propose_patch(scenario_name: str) -> PatchProposal:
         for h in d.hypotheses:
             context_parts.extend(h.supporting_evidence)
         context_parts.extend(e.content for e in d.evidence)
+        raw_logs_parts.extend(e.content for e in d.evidence)
 
     if scenario_name in INVESTIGATIONS_DB:
         inv = INVESTIGATIONS_DB[scenario_name]
@@ -760,6 +838,7 @@ async def propose_patch(scenario_name: str) -> PatchProposal:
         for ev in inv.evidence_store:
             if hasattr(ev, "content") and ev.content:
                 context_parts.append(ev.content)
+                raw_logs_parts.append(ev.content)
         for h in inv.hypotheses:
             if hasattr(h, "description") and h.description:
                 context_parts.append(h.description)
@@ -773,6 +852,7 @@ async def propose_patch(scenario_name: str) -> PatchProposal:
                 for ev in inv.evidence_store:
                     if hasattr(ev, "content") and ev.content:
                         context_parts.append(ev.content)
+                        raw_logs_parts.append(ev.content)
                 for h in inv.hypotheses:
                     if hasattr(h, "description") and h.description:
                         context_parts.append(h.description)
@@ -781,84 +861,22 @@ async def propose_patch(scenario_name: str) -> PatchProposal:
                 break
 
     full_context = " ".join(context_parts)
-    extracted_var, extracted_val = extract_env_var_info(full_context)
-
-    if extracted_var or "database_url" in full_context.lower() or "scenario_a" in full_context.lower():
-        effective_var = extracted_var or "DATABASE_URL"
-        effective_val = extracted_val or "postgresql://app_user:app_pass@localhost:5432/app_db"
-        return PatchProposal(
-            id=f"patch-{scenario_name}-env",
-            hypothesis_id="hyp-missing-env",
-            target_file="docker-compose.yml",
-            diff_unified=(
-                "--- a/docker-compose.yml\n"
-                "+++ b/docker-compose.yml\n"
-                "@@ -7,6 +7,7 @@\n"
-                "     ports:\n"
-                "       - \"8080:8080\"\n"
-                "     environment:\n"
-                f"+      - {effective_var}={effective_val}\n"
-                "       - PORT=8080\n"
-                "       - LOG_LEVEL=debug\n"
-            ),
-            explanation=f"Added missing {effective_var} environment variable to service configuration in docker-compose.yml.",
-            risk_level="LOW",
-            requires_human_approval=False,
-            verification_procedure="verify_env_presence",
-        )
-    elif "health" in full_context.lower() or "healthcheck" in full_context.lower() or "/healthz" in full_context.lower() or "scenario_b" in full_context.lower():
-        return PatchProposal(
-            id=f"patch-{scenario_name}-health",
-            hypothesis_id="hyp-healthcheck-mismatch",
-            target_file="docker-compose.yml",
-            diff_unified=(
-                "--- a/docker-compose.yml\n"
-                "+++ b/docker-compose.yml\n"
-                "@@ -10,3 +10,3 @@\n"
-                "     healthcheck:\n"
-                "-      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8000/health\"]\n"
-                "+      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8000/healthz\"]\n"
-            ),
-            explanation="Updated healthcheck probe endpoint URL from '/health' to the active route '/healthz'.",
-            risk_level="LOW",
-            requires_human_approval=False,
-            verification_procedure="verify_healthcheck_endpoint",
-        )
-    elif "rate_limit" in full_context.lower() or "main.py" in full_context.lower() or "scenario_g" in full_context.lower():
-        return PatchProposal(
-            id=f"patch-{scenario_name}-config",
-            hypothesis_id="hyp-config-regression",
-            target_file="main.py",
-            diff_unified=(
-                "--- a/main.py\n"
-                "+++ b/main.py\n"
-                "@@ -12,2 +12,2 @@\n"
-                "-RATE_LIMIT_BURST = \"unparsed_string\"\n"
-                "+RATE_LIMIT_BURST = 100\n"
-            ),
-            explanation="Fixed configuration regression: set RATE_LIMIT_BURST to valid integer literal 100.",
-            risk_level="LOW",
-            requires_human_approval=False,
-            verification_procedure="verify_syntax",
-        )
-    else:
-        return PatchProposal(
-            id=f"patch-{scenario_name}-port",
-            hypothesis_id="hyp-port-mismatch",
-            target_file="docker-compose.yml",
-            diff_unified=(
-                "--- a/docker-compose.yml\n"
-                "+++ b/docker-compose.yml\n"
-                "@@ -8,2 +8,2 @@\n"
-                "     ports:\n"
-                "-      - \"8000:5000\"\n"
-                "+      - \"8000:8000\"\n"
-            ),
-            explanation="Aligned container target port in docker-compose.yml from 5000 to 8000 to match application listener.",
-            risk_level="LOW",
-            requires_human_approval=False,
-            verification_procedure="verify_port_mapping",
-        )
+    raw_logs = " ".join(raw_logs_parts)
+    alignment = evaluate_custom_patch_alignment(
+        full_context=full_context,
+        raw_logs=raw_logs,
+        scenario_name=scenario_name,
+    )
+    return PatchProposal(
+        id=alignment["patch_id"],
+        hypothesis_id=alignment["hypothesis_id"],
+        target_file=alignment["target_file"],
+        diff_unified=alignment["diff_unified"],
+        explanation=alignment["explanation"],
+        risk_level="LOW",
+        requires_human_approval=False,
+        verification_procedure=alignment["verification_procedure"],
+    )
 
 
 class ApplyPatchRequest(BaseModel):
@@ -1001,6 +1019,7 @@ async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
         INVESTIGATIONS_DB[inv_id] = inv_state
         if idempotency_key:
             IDEMPOTENCY_STORE[idempotency_key] = (cached_resp, inv_state)
+        _save_persisted_state()
         return inv_state
 
     engine = DiagnosticEngine()
@@ -1057,12 +1076,11 @@ async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
     if idempotency_key:
         IDEMPOTENCY_STORE[idempotency_key] = (diag_resp, inv_state)
 
-    resolved_s = SCENARIO_ALIASES.get(scenario_name, scenario_name)
-    orig_comp = max(elapsed_ms, PRESET_BASELINE_COMPUTE_MS.get(resolved_s, elapsed_ms))
     DIAGNOSTIC_CACHE[cache_key] = {
         "response": diag_resp,
-        "original_duration_ms": orig_comp,
+        "original_duration_ms": elapsed_ms,
     }
+    _save_persisted_state()
     return inv_state
 
 

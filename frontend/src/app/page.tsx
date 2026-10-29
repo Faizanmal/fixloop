@@ -28,7 +28,64 @@ import {
   ShieldCheck,
   History,
 } from "lucide-react";
-import { extractEnvVarInfo } from "@/lib/utils";
+import { CANONICAL_MODEL_NAME, extractEnvVarInfo, formatModelName } from "@/lib/utils";
+
+const HISTORY_STORAGE_KEY = "fixloop_investigation_history_v1";
+
+function mergeHistoryLists(
+  existingList: InvestigationHistoryItem[],
+  incomingList: InvestigationHistoryItem[]
+): InvestigationHistoryItem[] {
+  const map = new Map<string, InvestigationHistoryItem>();
+  for (const item of existingList) {
+    if (item && item.id) {
+      map.set(item.id, item);
+    }
+  }
+  for (const item of incomingList) {
+    if (!item || !item.id) continue;
+    const existing = map.get(item.id);
+    if (existing) {
+      const hasTerminalVerification =
+        existing.status === "verified_fixed" ||
+        existing.status === "verification_failed" ||
+        existing.status === "patch_rejected" ||
+        item.status === "verified_fixed" ||
+        item.status === "verification_failed" ||
+        item.status === "patch_rejected";
+      const mergedStatus =
+        item.status === "verified_fixed" ||
+        item.status === "verification_failed" ||
+        item.status === "patch_rejected"
+          ? item.status
+          : hasTerminalVerification
+          ? existing.status
+          : item.status;
+      map.set(item.id, {
+        ...existing,
+        ...item,
+        status: mergedStatus,
+        durationMs:
+          hasTerminalVerification &&
+          existing.verificationReport &&
+          existing.durationMs > item.durationMs
+            ? existing.durationMs
+            : item.durationMs,
+        originalDurationMs:
+          item.originalDurationMs ?? existing.originalDurationMs ?? null,
+        lookupDurationMs:
+          item.lookupDurationMs ?? existing.lookupDurationMs ?? null,
+        verificationReport:
+          item.verificationReport || existing.verificationReport || null,
+        diagnosis: item.diagnosis || existing.diagnosis || null,
+        patchProposal: item.patchProposal || existing.patchProposal || null,
+      });
+    } else {
+      map.set(item.id, item);
+    }
+  }
+  return Array.from(map.values()).slice(-20);
+}
 
 export default function Home() {
   // System Readiness & Scenarios
@@ -87,22 +144,73 @@ export default function Home() {
     >
   >(new Map());
 
+  //Persist & hydrate history in localStorage so reloads preserve previous runs
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(HISTORY_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as InvestigationHistoryItem[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          for (const item of parsed) {
+            if (item?.id && item.diagnosis) {
+              investigationCache.current.set(item.id, {
+                diagnosis: item.diagnosis,
+                patchProposal: item.patchProposal || null,
+                verificationReport: item.verificationReport || null,
+              });
+            }
+          }
+          setHistory((prev) => mergeHistoryLists(parsed, prev));
+        }
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+  }, []);
+
+  useEffect(() => {
+    if (history.length === 0) return;
+    try {
+      window.localStorage.setItem(
+        HISTORY_STORAGE_KEY,
+        JSON.stringify(history.slice(-20))
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [history]);
+
   useEffect(() => {
     let isMounted = true;
 
     async function executeLoad() {
       try {
-        const readyData = await apiClient.checkReadiness();
-        if (isMounted) setReadiness(readyData);
+        const [readyRes, scenariosRes, recentRes] = await Promise.allSettled([
+          apiClient.checkReadiness(),
+          apiClient.fetchScenarios(),
+          apiClient.fetchRecentInvestigations(),
+        ]);
 
-        const scenarioList = await apiClient.fetchScenarios();
-        if (isMounted && scenarioList && scenarioList.length > 0) {
-          setScenarios(scenarioList);
+        if (!isMounted) return;
+
+        if (readyRes.status === "fulfilled" && readyRes.value) {
+          setReadiness(readyRes.value);
         }
 
-        const recentRuns = await apiClient.fetchRecentInvestigations();
-        if (isMounted && recentRuns && recentRuns.length > 0) {
-          // If in flight and history refresh finishes first, reset spinner immediately (Issue 2)
+        if (
+          scenariosRes.status === "fulfilled" &&
+          scenariosRes.value &&
+          scenariosRes.value.length > 0
+        ) {
+          setScenarios(scenariosRes.value);
+        }
+
+        if (
+          recentRes.status === "fulfilled" &&
+          recentRes.value &&
+          recentRes.value.length > 0
+        ) {
+          const recentRuns = recentRes.value;
           if (inFlightRef.current) {
             const hasRecentMatch = recentRuns.some(
               (r) =>
@@ -115,36 +223,17 @@ export default function Home() {
             }
           }
 
-          setHistory((prev) => {
-            const map = new Map<string, InvestigationHistoryItem>();
-            for (const item of prev) {
-              map.set(item.id, item);
+          for (const item of recentRuns) {
+            if (item.id && item.diagnosis) {
+              investigationCache.current.set(item.id, {
+                diagnosis: item.diagnosis,
+                patchProposal: item.patchProposal || null,
+                verificationReport: item.verificationReport || null,
+              });
             }
-            for (const item of recentRuns) {
-              const existing = map.get(item.id);
-              if (existing) {
-                const isVerified =
-                  existing.status === "verified_fixed" ||
-                  item.status === "verified_fixed";
-                map.set(item.id, {
-                  ...existing,
-                  ...item,
-                  status: isVerified ? "verified_fixed" : item.status,
-                  durationMs: isVerified && existing.verificationReport && existing.durationMs > item.durationMs
-                    ? existing.durationMs
-                    : item.durationMs,
-                  verificationReport:
-                    item.verificationReport || existing.verificationReport,
-                  diagnosis: item.diagnosis || existing.diagnosis,
-                  patchProposal:
-                    item.patchProposal || existing.patchProposal,
-                });
-              } else {
-                map.set(item.id, item);
-              }
-            }
-            return Array.from(map.values()).slice(-20);
-          });
+          }
+
+          setHistory((prev) => mergeHistoryLists(prev, recentRuns));
         }
       } catch (err: unknown) {
         console.warn("Readiness probe warning:", err);
@@ -304,28 +393,7 @@ export default function Home() {
       try {
         const freshRuns = await apiClient.fetchRecentInvestigations();
         if (freshRuns && freshRuns.length > 0) {
-          setHistory((prev) => {
-            const map = new Map<string, InvestigationHistoryItem>();
-            for (const p of prev) map.set(p.id, p);
-            for (const r of freshRuns) {
-              const existing = map.get(r.id);
-              if (existing) {
-                const isVerified = existing.status === "verified_fixed" || r.status === "verified_fixed";
-                map.set(r.id, {
-                  ...existing,
-                  ...r,
-                  status: isVerified ? "verified_fixed" : r.status,
-                  durationMs: isVerified && existing.verificationReport && existing.durationMs > r.durationMs
-                    ? existing.durationMs
-                    : r.durationMs,
-                  verificationReport: r.verificationReport || existing.verificationReport,
-                });
-              } else {
-                map.set(r.id, r);
-              }
-            }
-            return Array.from(map.values()).slice(-20);
-          });
+          setHistory((prev) => mergeHistoryLists(prev, freshRuns));
         }
       } catch {
         // Soft fallback
@@ -463,28 +531,7 @@ export default function Home() {
           try {
             const freshRuns = await apiClient.fetchRecentInvestigations();
             if (freshRuns && freshRuns.length > 0) {
-              setHistory((prev) => {
-                const map = new Map<string, InvestigationHistoryItem>();
-                for (const p of prev) map.set(p.id, p);
-                for (const r of freshRuns) {
-                  const existing = map.get(r.id);
-                  if (existing) {
-                    const isVerified = existing.status === "verified_fixed" || r.status === "verified_fixed";
-                    map.set(r.id, {
-                      ...existing,
-                      ...r,
-                      status: isVerified ? "verified_fixed" : r.status,
-                      durationMs: isVerified && existing.verificationReport && existing.durationMs > r.durationMs
-                        ? existing.durationMs
-                        : r.durationMs,
-                      verificationReport: r.verificationReport || existing.verificationReport,
-                    });
-                  } else {
-                    map.set(r.id, r);
-                  }
-                }
-                return Array.from(map.values()).slice(-20);
-              });
+              setHistory((prev) => mergeHistoryLists(prev, freshRuns));
             }
           } catch {
             // Soft fallback
@@ -901,16 +948,17 @@ export default function Home() {
                         ? history.find((h) => h.id === diagnosis.investigation_id)
                         : null);
                   const effectiveStatus =
-                    activeItem?.status ||
-                    (verificationReport?.status === "verified_fixed"
+                    verificationReport?.status === "verified_fixed"
                       ? "verified_fixed"
-                      : verificationReport?.status === "verification_failed"
+                      : verificationReport?.status === "verification_failed" ||
+                        verificationReport?.status === "patch_rejected"
                       ? "verification_failed"
-                      : diagnosis.status === "insufficient_evidence"
-                      ? "insufficient_evidence"
-                      : diagnosis.confidence < 0.9
-                      ? "patch_blocked"
-                      : diagnosis.status);
+                      : activeItem?.status ||
+                        (diagnosis.status === "insufficient_evidence"
+                          ? "insufficient_evidence"
+                          : diagnosis.confidence < 0.9
+                          ? "patch_blocked"
+                          : diagnosis.status);
                   const effectiveDuration = activeItem?.durationMs;
                   const isCached = activeItem?.isCached ?? diagnosis.is_cached;
                   const originalDurationMs = activeItem?.originalDurationMs ?? diagnosis.original_duration_ms;
@@ -1044,7 +1092,7 @@ export default function Home() {
             <span>•</span>
             <span>Nebius Token Factory</span>
             <span>•</span>
-            <span>NVIDIA Nemotron-3-Nano</span>
+            <span>{formatModelName(readiness?.nebius?.model) || CANONICAL_MODEL_NAME}</span>
           </div>
           <div className="flex items-center gap-4 text-slate-400">
             <span className="flex items-center gap-1 text-emerald-400">

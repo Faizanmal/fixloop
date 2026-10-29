@@ -53,7 +53,9 @@ export function PatchReviewCard({
 
     return lines.map((line, idx) => {
       let lineType = "context";
-      if (line.startsWith("@@")) {
+      if (line.startsWith("---") || line.startsWith("+++")) {
+        lineType = "file-header";
+      } else if (line.startsWith("@@")) {
         lineType = "header";
         const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
         if (match) {
@@ -66,8 +68,18 @@ export function PatchReviewCard({
         lineType = "del";
       }
 
-      const currentOld = lineType === "add" ? "" : lineType === "header" ? "..." : oldLineNum++;
-      const currentNew = lineType === "del" ? "" : lineType === "header" ? "..." : newLineNum++;
+      const currentOld =
+        lineType === "add" || lineType === "file-header"
+          ? ""
+          : lineType === "header"
+          ? "..."
+          : oldLineNum++;
+      const currentNew =
+        lineType === "del" || lineType === "file-header"
+          ? ""
+          : lineType === "header"
+          ? "..."
+          : newLineNum++;
 
       return (
         <div
@@ -79,6 +91,8 @@ export function PatchReviewCard({
               ? "diff-line-del bg-rose-950/30 text-rose-300"
               : lineType === "header"
               ? "diff-line-info bg-cyan-950/20 text-cyan-400 py-1"
+              : lineType === "file-header"
+              ? "diff-line-file-header bg-slate-900/80 text-slate-300 font-semibold py-0.5"
               : "diff-line-context text-slate-400 hover:bg-slate-900/40"
           }`}
         >
@@ -92,11 +106,11 @@ export function PatchReviewCard({
           </span>
           {/* Sign symbol */}
           <span className="w-6 py-0.5 text-center font-mono text-xs select-none shrink-0 font-bold">
-            {line.startsWith("+") ? "+" : line.startsWith("-") ? "-" : line.startsWith("@") ? "@" : " "}
+            {lineType === "add" ? "+" : lineType === "del" ? "-" : lineType === "header" ? "@" : " "}
           </span>
           {/* Code content */}
           <span className="px-2 py-0.5 whitespace-pre overflow-x-auto flex-1">
-            {line.startsWith("+") || line.startsWith("-") ? line.slice(1) : line}
+            {lineType === "add" || lineType === "del" ? line.slice(1) : line}
           </span>
         </div>
       );

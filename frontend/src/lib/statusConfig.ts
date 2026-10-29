@@ -1,3 +1,5 @@
+import { stripTrailingPeriod } from "@/lib/utils";
+
 export interface VerificationReportLike {
   status?: string;
   test_output?: string;
@@ -13,6 +15,7 @@ export interface StatusPanelConfig {
   isConclusive: boolean;
   isInsufficient: boolean;
   isVerified: boolean;
+  isVerificationFailed?: boolean;
 }
 
 /**
@@ -34,9 +37,10 @@ export function getStatusPanelConfig(
     normStatus === "verified" ||
     verificationReport?.status === "verified_fixed"
   ) {
-    const testSummary = verificationReport?.test_output
+    const rawSummary = verificationReport?.test_output
       ? verificationReport.test_output.split("\n")[0].trim()
       : "Isolated sandbox container returned exit code 0";
+    const testSummary = stripTrailingPeriod(rawSummary);
 
     return {
       badgeText: "VERIFIED FIXED",
@@ -47,6 +51,7 @@ export function getStatusPanelConfig(
       isConclusive: true,
       isInsufficient: false,
       isVerified: true,
+      isVerificationFailed: false,
     };
   }
 
@@ -64,6 +69,7 @@ export function getStatusPanelConfig(
       isConclusive: false,
       isInsufficient: true,
       isVerified: false,
+      isVerificationFailed: false,
     };
   }
 
@@ -71,7 +77,9 @@ export function getStatusPanelConfig(
   if (
     normStatus === "verification_failed" ||
     normStatus === "failed_fix" ||
-    verificationReport?.status === "verification_failed"
+    normStatus === "patch_rejected" ||
+    verificationReport?.status === "verification_failed" ||
+    verificationReport?.status === "patch_rejected"
   ) {
     return {
       badgeText: "VERIFICATION FAILED",
@@ -82,6 +90,7 @@ export function getStatusPanelConfig(
       isConclusive: false,
       isInsufficient: false,
       isVerified: false,
+      isVerificationFailed: true,
     };
   }
 
