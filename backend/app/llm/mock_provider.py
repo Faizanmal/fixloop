@@ -222,7 +222,13 @@ class MockLLMProvider:
                     re.search(r"Required environment variable\s*['\"]([A-Z0-9_]+)['\"]", logs, re.IGNORECASE) or \
                     re.search(r"missing\s+['\"]?([A-Z0-9_]+)['\"]?\s+(?:env|environment variable)", logs, re.IGNORECASE)
 
-        if env_match or (("keyerror" in logs.lower() or "missing env" in logs.lower() or "environment variable" in logs.lower()) and "database" in context_str):
+        if env_match or ((
+            "keyerror" in logs.lower()
+            or "missing env" in logs.lower()
+            or "environment variable" in logs.lower()
+            or "variable missing" in logs.lower()
+            or "missing variable" in logs.lower()
+        ) and "database" in context_str):
             var_name = env_match.group(1) if env_match else ("DATABASE_URL" if "database" in context_str else "CONFIG_VAR")
             evidence_snippet = next((line.strip() for line in logs.splitlines() if var_name in line or "KeyError" in line), f"KeyError: '{var_name}'")
             return DiagnoseResponse(

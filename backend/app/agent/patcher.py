@@ -62,7 +62,7 @@ def extract_env_var_info(text: str) -> Tuple[Optional[str], Optional[str]]:
         # 3. Look for explicit mentions of common variable names
         for known in [
             "REDIS_URL", "DATABASE_URL", "SECRET_KEY", "JWT_SECRET", "API_KEY",
-            "PORT", "RABBITMQ_URL", "MONGO_URI", "MONGODB_URI", "POSTGRES_URL",
+            "RABBITMQ_URL", "MONGO_URI", "MONGODB_URI", "POSTGRES_URL",
             "BACKEND_URL", "AUTH_TOKEN", "SESSION_SECRET"
         ]:
             if re.search(rf"\b{known}\b", text, re.IGNORECASE):

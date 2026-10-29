@@ -147,7 +147,7 @@ Return ONLY a valid JSON object matching this schema:
   "refusal_reason": null
 }
 
-ALLOWED CATEGORIES: "CONFIG_ERROR", "CODE_BUG", "RESOURCE_EXHAUSTION", "EXTERNAL_DEPENDENCY", "UNKNOWN".
+ALLOWED CATEGORIES: "HEALTHCHECK_MISCONFIG", "PORT_MISMATCH", "MISSING_ENV", "CONFIG_ERROR", "CODE_DEFECT", "CODE_BUG", "RESOURCE_EXHAUSTION", "EXTERNAL_DEPENDENCY", "UNKNOWN".
 Set is_evidence_sufficient to true only when confidence >= 0.85 and no further probes are required.
 """
 

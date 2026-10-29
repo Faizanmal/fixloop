@@ -122,5 +122,8 @@ test("extractEnvVarInfo handles security and port tokens", () => {
 
   const unrelated = extractEnvVarInfo("404 healthcheck probe failed");
   assert.strictEqual(unrelated, null);
+
+  const portMismatch = extractEnvVarInfo("Port forwarding target mismatch on port 8000");
+  assert.strictEqual(portMismatch, null);
 });
 

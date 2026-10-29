@@ -101,7 +101,7 @@ export function extractEnvVarInfo(text: string): { varName: string; defaultVal: 
     // 3. Known variable patterns
     const knownVars = [
       "REDIS_URL", "DATABASE_URL", "SECRET_KEY", "JWT_SECRET", "API_KEY",
-      "PORT", "RABBITMQ_URL", "MONGO_URI", "MONGODB_URI", "POSTGRES_URL",
+      "RABBITMQ_URL", "MONGO_URI", "MONGODB_URI", "POSTGRES_URL",
       "BACKEND_URL", "AUTH_TOKEN", "SESSION_SECRET"
     ];
     for (const known of knownVars) {
