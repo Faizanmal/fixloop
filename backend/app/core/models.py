@@ -204,6 +204,10 @@ class InvestigationState(BaseModel):
     started_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     idempotency_key: str | None = None
+    client_session_id: str | None = Field(
+        default=None,
+        description="Browser-scoped session id; isolates history between devices/users",
+    )
     is_cached: bool = False
     original_duration_ms: int | None = None
     has_safe_patch: bool | None = None
@@ -443,6 +447,10 @@ class DiagnoseRequest(BaseModel):
     )
     client_last_id: str | None = Field(
         default=None, description="Highest run ID currently stored in client history"
+    )
+    client_session_id: str | None = Field(
+        default=None,
+        description="Anonymous browser session id used to scope investigation history",
     )
     async_mode: bool | None = Field(
         default=False,

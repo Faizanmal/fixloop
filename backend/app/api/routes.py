@@ -561,6 +561,7 @@ async def _compute_diagnosis(
             started_at=now_dt,
             updated_at=now_dt,
             idempotency_key=request.idempotency_key,
+            client_session_id=request.client_session_id,
         )
         INVESTIGATION_DIAGNOSES[inv_id] = diag_resp
         INVESTIGATIONS_DB[inv_id] = inv_state
@@ -703,6 +704,7 @@ async def _compute_diagnosis(
             started_at=now_dt,
             updated_at=now_dt,
             idempotency_key=request.idempotency_key,
+            client_session_id=request.client_session_id,
         )
         INVESTIGATION_DIAGNOSES[inv_id] = diagnosis
         INVESTIGATIONS_DB[inv_id] = inv_state
@@ -851,6 +853,7 @@ async def diagnose(request: DiagnoseRequest) -> Any:
             started_at=now_dt,
             updated_at=now_dt,
             idempotency_key=request.idempotency_key,
+            client_session_id=request.client_session_id,
             is_cached=True,
             original_duration_ms=cached_entry["original_duration_ms"],
         )
@@ -890,6 +893,7 @@ async def diagnose(request: DiagnoseRequest) -> Any:
             started_at=now_dt,
             updated_at=now_dt,
             idempotency_key=request.idempotency_key,
+            client_session_id=request.client_session_id,
         )
         INVESTIGATIONS_DB[inv_id] = inv_state
 
@@ -1275,10 +1279,28 @@ async def list_scenarios():
 
 @router.get("/investigations", tags=["Investigations"])
 @router.get("/api/investigations", tags=["Investigations"], include_in_schema=False)
-async def list_investigations() -> list[InvestigationState]:
-    """List all recorded investigation runs, newest created time first."""
+async def list_investigations(
+    client_session_id: str | None = None,
+) -> list[InvestigationState]:
+    """List investigation runs for this browser session, newest first.
+
+    Production: require client_session_id so devices/users cannot see each other's
+    history. Pytest may omit the param and receive the full in-memory store.
+    """
+    items = list(INVESTIGATIONS_DB.values())
+    if client_session_id and str(client_session_id).strip():
+        session_key = str(client_session_id).strip()
+        items = [
+            inv
+            for inv in items
+            if (inv.client_session_id or "").strip() == session_key
+        ]
+    elif not _is_test_session():
+        # No anonymous global dump on the live API
+        return []
+
     return sorted(
-        INVESTIGATIONS_DB.values(),
+        items,
         key=lambda inv: inv.started_at or inv.updated_at or utc_now(),
         reverse=True,
     )
@@ -1311,6 +1333,7 @@ async def start_investigation(request: dict[str, Any]) -> InvestigationState:
         return cached_copy
 
     scenario_name = request.get("scenario_name") or request.get("service_name")
+    client_session_id = request.get("client_session_id")
     if not scenario_name:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1370,6 +1393,7 @@ async def start_investigation(request: dict[str, Any]) -> InvestigationState:
             started_at=now_dt,
             updated_at=now_dt,
             idempotency_key=idempotency_key,
+            client_session_id=client_session_id,
             is_cached=True,
             original_duration_ms=cached_entry["original_duration_ms"],
         )
@@ -1433,6 +1457,7 @@ async def start_investigation(request: dict[str, Any]) -> InvestigationState:
         started_at=now_dt,
         updated_at=now_dt,
         idempotency_key=idempotency_key,
+        client_session_id=client_session_id,
     )
     INVESTIGATIONS_DB[inv_id] = inv_state
     if idempotency_key:

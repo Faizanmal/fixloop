@@ -31,8 +31,8 @@ import {
 } from "lucide-react";
 import { CANONICAL_MODEL_NAME, extractEnvVarInfo, formatModelName } from "@/lib/utils";
 
-const HISTORY_STORAGE_KEY = "fixloop_investigation_history_v1";
-const ACTIVE_SELECTION_STORAGE_KEY = "fixloop_active_selection_v1";
+const HISTORY_STORAGE_KEY = "fixloop_investigation_history_v2";
+const ACTIVE_SELECTION_STORAGE_KEY = "fixloop_active_selection_v2";
 
 function parseHistoryEpoch(item: InvestigationHistoryItem): number {
   const raw = item.startedAtIso || item.timestamp;

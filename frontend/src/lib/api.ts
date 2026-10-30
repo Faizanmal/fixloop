@@ -45,6 +45,29 @@ export function getApiBaseUrl(): string {
 
 export const API_BASE_URL = getApiBaseUrl();
 
+const CLIENT_SESSION_STORAGE_KEY = "fixloop_client_session_v1";
+
+/** Anonymous per-browser session id — isolates investigation history across devices/users. */
+export function getOrCreateClientSessionId(): string {
+  if (typeof window === "undefined") {
+    return "ssr";
+  }
+  try {
+    const existing = window.localStorage.getItem(CLIENT_SESSION_STORAGE_KEY);
+    if (existing && existing.trim().length > 8) {
+      return existing.trim();
+    }
+    const id =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `sess-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    window.localStorage.setItem(CLIENT_SESSION_STORAGE_KEY, id);
+    return id;
+  } catch {
+    return `sess-ephemeral-${Date.now()}`;
+  }
+}
+
 export interface ScenarioInfo {
   id: string;
   name: string;
@@ -376,6 +399,7 @@ class FixLoopApiClient {
     if (clientLastId) {
       payload.client_last_id = clientLastId;
     }
+    payload.client_session_id = getOrCreateClientSessionId();
     payload.async_mode = true;
 
     // 1. Submit diagnosis start request
@@ -581,7 +605,9 @@ class FixLoopApiClient {
 
   async fetchRecentInvestigations(): Promise<InvestigationHistoryItem[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/investigations`, {
+      const sessionId = getOrCreateClientSessionId();
+      const qs = `?client_session_id=${encodeURIComponent(sessionId)}`;
+      const res = await fetch(`${this.baseUrl}/investigations${qs}`, {
         method: "GET",
         headers: { Accept: "application/json" },
         cache: "no-store",
