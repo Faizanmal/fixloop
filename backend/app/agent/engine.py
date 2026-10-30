@@ -2005,8 +2005,8 @@ class DiagnosticEngine:
         elif top_confidence >= 0.90:
             status = DiagnosisStatus.DIAGNOSIS_AVAILABLE
             summary = hypotheses[0].description
-            next_action = (
-                "Apply minimal configuration or code patch to resolve root cause."
+            next_action = self._next_action_for_conclusive(
+                hypotheses[0].description, facts
             )
         elif facts.get("external_outage_detected"):
             status = DiagnosisStatus.INSUFFICIENT_EVIDENCE
@@ -2443,8 +2443,8 @@ class DiagnosticEngine:
         elif top_confidence >= 0.90:
             status = DiagnosisStatus.DIAGNOSIS_AVAILABLE
             summary = hypotheses[0].description
-            next_action = (
-                "Apply minimal configuration or code patch to resolve root cause."
+            next_action = self._next_action_for_conclusive(
+                hypotheses[0].description, facts
             )
         elif facts.get("external_outage_detected"):
             status = DiagnosisStatus.INSUFFICIENT_EVIDENCE
@@ -2471,6 +2471,35 @@ class DiagnosticEngine:
             uncertainty=uncertainty,
             contradictions=contradictions,
         )
+
+    @staticmethod
+    def _next_action_for_conclusive(
+        description: str, facts: dict[str, Any]
+    ) -> str:
+        """Return a next action that matches whether a safe automated patch exists."""
+        desc = (description or "").lower()
+        if (
+            facts.get("oom_killed")
+            or "oom" in desc
+            or "memory exhaustion" in desc
+            or "exit code 137" in desc
+            or "exit 137" in desc
+        ):
+            return (
+                "Manually investigate kernel OOM / container memory limits; "
+                "no automated code patch is safe for this root cause."
+            )
+        if (
+            facts.get("contradictory_cache_state")
+            or "contradictory" in desc
+            or ("redis" in desc and "in-memory" in desc)
+            or "no redis patch" in desc
+        ):
+            return (
+                "Manually review contradictory evidence and confirm intended cache mode; "
+                "no automated patch is required while Redis is explicitly disabled."
+            )
+        return "Apply minimal configuration or code patch to resolve root cause."
 
     def _build_result(
         self,

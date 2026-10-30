@@ -34,6 +34,39 @@ import { CANONICAL_MODEL_NAME, extractEnvVarInfo, formatModelName } from "@/lib/
 const HISTORY_STORAGE_KEY = "fixloop_investigation_history_v1";
 const ACTIVE_SELECTION_STORAGE_KEY = "fixloop_active_selection_v1";
 
+function parseHistoryEpoch(item: InvestigationHistoryItem): number {
+  const raw = item.startedAtIso || item.timestamp;
+  if (!raw) return 0;
+  const t = new Date(raw).getTime();
+  return Number.isNaN(t) ? 0 : t;
+}
+
+function sortHistoryNewestFirst(
+  list: InvestigationHistoryItem[]
+): InvestigationHistoryItem[] {
+  return [...list].sort((a, b) => {
+    const timeA = parseHistoryEpoch(a);
+    const timeB = parseHistoryEpoch(b);
+    if (timeA !== timeB) return timeB - timeA;
+    const numA = parseInt(a.id.replace(/\D/g, ""), 10) || 0;
+    const numB = parseInt(b.id.replace(/\D/g, ""), 10) || 0;
+    return numB - numA;
+  });
+}
+
+function maxClientRunId(list: InvestigationHistoryItem[]): string | undefined {
+  let maxNum = 0;
+  let maxId: string | undefined;
+  for (const item of list) {
+    const num = parseInt((item.id || "").replace(/\D/g, ""), 10) || 0;
+    if (num > maxNum) {
+      maxNum = num;
+      maxId = item.id;
+    }
+  }
+  return maxId;
+}
+
 function mergeHistoryLists(
   existingList: InvestigationHistoryItem[],
   incomingList: InvestigationHistoryItem[]
@@ -88,12 +121,14 @@ function mergeHistoryLists(
       map.set(key, { ...item, id: item.id.toLowerCase() });
     }
   }
-  return Array.from(map.values()).slice(-100);
+  return sortHistoryNewestFirst(Array.from(map.values())).slice(0, 100);
 }
 
 export default function Home() {
   // System Readiness & Scenarios
   const [readiness, setReadiness] = useState<SystemReadiness | null>(null);
+  const [isBootstrapping, setIsBootstrapping] = useState<boolean>(true);
+  const [historyHydrated, setHistoryHydrated] = useState<boolean>(false);
   const [scenarios, setScenarios] = useState<ScenarioInfo[]>(STATIC_SCENARIOS);
   const [selectedPresetId, setSelectedPresetId] = useState<string>(
     "scenario_a_missing_env"
@@ -105,11 +140,15 @@ export default function Home() {
   // Active Diagnostic & Verification Flow
   const [isInvestigating, setIsInvestigating] = useState<boolean>(false);
   const [isVerifying, setIsVerifying] = useState<boolean>(false);
+  const [investigationStep, setInvestigationStep] = useState<string>("");
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
+  const [runStartedAtMs, setRunStartedAtMs] = useState<number | null>(null);
   const [diagnosis, setDiagnosis] = useState<DiagnoseResponse | null>(null);
   const [patchProposal, setPatchProposal] = useState<PatchProposal | null>(null);
   const [verificationReport, setVerificationReport] =
     useState<VerificationReport | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
 
   // History & Demo State
   const [history, setHistory] = useState<InvestigationHistoryItem[]>([]);
@@ -174,7 +213,7 @@ export default function Home() {
           const merged = mergeHistoryLists(parsed, []);
           setHistory(merged);
 
-          // Restore latest run & active target after reload (Requirement 3)
+          // Restore latest run & active target after reload (only when not investigating)
           try {
             const rawActive = window.localStorage.getItem(ACTIVE_SELECTION_STORAGE_KEY);
             let activeItem: InvestigationHistoryItem | undefined;
@@ -191,18 +230,14 @@ export default function Home() {
               }
             }
             if (!activeItem && merged.length > 0) {
-              const sorted = [...merged].sort((a, b) => {
-                const timeA = a.startedAtIso ? new Date(a.startedAtIso).getTime() : 0;
-                const timeB = b.startedAtIso ? new Date(b.startedAtIso).getTime() : 0;
-                return timeB - timeA;
-              });
-              activeItem = sorted[0];
+              activeItem = merged[0];
             }
-            if (activeItem && activeItem.diagnosis) {
+            if (activeItem && activeItem.diagnosis && !inFlightRef.current) {
               setDiagnosis(activeItem.diagnosis);
               setPatchProposal(activeItem.patchProposal || null);
               setVerificationReport(activeItem.verificationReport || null);
               setInspectedRunId(activeItem.id.toLowerCase());
+              setActiveRunId(activeItem.id.toLowerCase());
               setSelectedScenarioId(activeItem.scenarioName);
               setSelectedPresetId(activeItem.scenarioName);
             }
@@ -213,8 +248,20 @@ export default function Home() {
       }
     } catch {
       // Ignore storage access errors
+    } finally {
+      setHistoryHydrated(true);
     }
   }, []);
+
+  // Live elapsed seconds while a diagnostic cycle is running
+  useEffect(() => {
+    if (!isInvestigating || runStartedAtMs == null) return;
+    setElapsedSeconds(Math.max(0, Math.floor((performance.now() - runStartedAtMs) / 1000)));
+    const timer = window.setInterval(() => {
+      setElapsedSeconds(Math.max(0, Math.floor((performance.now() - runStartedAtMs) / 1000)));
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [isInvestigating, runStartedAtMs]);
 
   useEffect(() => {
     if (history.length === 0) return;
@@ -245,26 +292,7 @@ export default function Home() {
   useEffect(() => {
     let isMounted = true;
 
-    // Fast initial probe for Docker / Sandbox status (~10ms)
-    void apiClient
-      .checkHealth()
-      .then((dockerStatus) => {
-        if (!isMounted || !dockerStatus) return;
-        setReadiness((prev) => {
-          if (prev) {
-            return { ...prev, docker: dockerStatus };
-          }
-          return {
-            ready: false,
-            service: "fixloop",
-            docker: dockerStatus,
-            issues: [],
-          };
-        });
-      })
-      .catch(() => {});
-
-    async function executeLoad() {
+    async function executeLoad(isInitial: boolean = false) {
       try {
         const [readyRes, scenariosRes, recentRes] = await Promise.allSettled([
           apiClient.checkReadiness(),
@@ -286,24 +314,8 @@ export default function Home() {
           setScenarios(scenariosRes.value);
         }
 
-        if (
-          recentRes.status === "fulfilled" &&
-          recentRes.value &&
-          recentRes.value.length > 0
-        ) {
+        if (recentRes.status === "fulfilled" && recentRes.value) {
           const recentRuns = recentRes.value;
-          if (inFlightRef.current) {
-            const hasRecentMatch = recentRuns.some(
-              (r) =>
-                r.scenarioName === selectedScenarioIdRef.current &&
-                Date.now() - new Date(r.startedAtIso || 0).getTime() < 90000
-            );
-            if (hasRecentMatch) {
-              inFlightRef.current = false;
-              setIsInvestigating(false);
-            }
-          }
-
           for (const item of recentRuns) {
             if (item.id && item.diagnosis) {
               investigationCache.current.set(item.id.toLowerCase(), {
@@ -316,18 +328,20 @@ export default function Home() {
 
           setHistory((prev) => {
             const merged = mergeHistoryLists(prev, recentRuns);
-            if (!diagnosis && merged.length > 0) {
-              const sorted = [...merged].sort((a, b) => {
-                const timeA = a.startedAtIso ? new Date(a.startedAtIso).getTime() : 0;
-                const timeB = b.startedAtIso ? new Date(b.startedAtIso).getTime() : 0;
-                return timeB - timeA;
-              });
-              const latest = sorted[0];
-              if (latest && latest.diagnosis) {
+            // Never overwrite the live panel while a run is in flight
+            if (
+              !inFlightRef.current &&
+              !inspectedRunIdRef.current &&
+              isInitial &&
+              merged.length > 0
+            ) {
+              const latest = merged[0];
+              if (latest?.diagnosis) {
                 setDiagnosis(latest.diagnosis);
                 setPatchProposal(latest.patchProposal || null);
                 setVerificationReport(latest.verificationReport || null);
                 setInspectedRunId(latest.id.toLowerCase());
+                setActiveRunId(latest.id.toLowerCase());
                 setSelectedScenarioId(latest.scenarioName);
                 setSelectedPresetId(latest.scenarioName);
               }
@@ -337,14 +351,17 @@ export default function Home() {
         }
       } catch (err: unknown) {
         console.warn("Readiness probe warning:", err);
+      } finally {
+        if (isMounted && isInitial) {
+          setIsBootstrapping(false);
+        }
       }
     }
 
-    void executeLoad();
+    void executeLoad(true);
     const interval = setInterval(() => {
-      // Do not run background polls while diagnosis is in flight or user is inspecting to prevent list shifts
       if (!inFlightRef.current && !inspectedRunIdRef.current) {
-        void executeLoad();
+        void executeLoad(false);
       }
     }, 60000);
 
@@ -365,15 +382,20 @@ export default function Home() {
   ) => {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
+    const startTime = performance.now();
+    setRunStartedAtMs(startTime);
+    setElapsedSeconds(0);
     setIsInvestigating(true);
+    setInvestigationStep("Evidence Ingestion");
     setErrorMessage(null);
+    // Clear previous run from the panel immediately — show only the current run
     setDiagnosis(null);
     setPatchProposal(null);
     setVerificationReport(null);
     setInspectedRunId(null);
+    setActiveRunId(null);
     setIsLoadingInspect(false);
     setInspectError(null);
-    const startTime = performance.now();
     const effectiveTarget = targetServiceId || selectedScenarioId;
 
     // Preserve run parameters on retry to attach to the same run (Requirement 1 & 2)
@@ -384,8 +406,8 @@ export default function Home() {
         ? existingInFlight.idempotencyKey
         : `req-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
-    // Pass highest seen client run id so backend counter never collides
-    const clientLastId = history.length > 0 ? history[0]?.id : undefined;
+    // Pass highest numeric client run id so backend counter never collides
+    const clientLastId = maxClientRunId(history);
 
     lastInFlightRef.current = {
       runId: reuseRunId,
@@ -395,6 +417,7 @@ export default function Home() {
     };
 
     try {
+      setInvestigationStep("Configuration Audit");
       // Step A: Run real diagnosis via FastAPI with async background polling support
       const result = await apiClient.runDiagnosis(
         effectiveTarget,
@@ -403,25 +426,38 @@ export default function Home() {
         reuseRunId,
         clientLastId
       );
-      setDiagnosis(result);
+      setInvestigationStep("Hypothesis Ranking");
 
       const invId = (result.investigation_id || reuseRunId || `run-${Date.now().toString().slice(-4)}`).toLowerCase();
       if (lastInFlightRef.current) {
         lastInFlightRef.current.runId = invId;
       }
-      setInspectedRunId(invId);
+
+      // Prefer server duration; fall back to wall-clock so banner and row stay aligned
+      const wallMs = Math.round(performance.now() - startTime);
+      const durationMs = result.duration_ms && result.duration_ms > 0 ? result.duration_ms : wallMs;
+      const alignedResult: DiagnoseResponse = {
+        ...result,
+        duration_ms: durationMs,
+        investigation_id: invId,
+      };
 
       // Step B: Fetch real proposed patch diff from backend
       let patch: PatchProposal | null = null;
       if (
-        result.status === "diagnosis_available" &&
-        result.confidence >= 0.9 &&
-        result.has_safe_patch !== false
+        alignedResult.status === "diagnosis_available" &&
+        alignedResult.confidence >= 0.9 &&
+        alignedResult.has_safe_patch !== false
       ) {
+        setInvestigationStep("Preparing Patch Proposal");
         try {
-          patch = await apiClient.fetchPatchProposal(invId || effectiveTarget);
-          if (patch) {
-            setPatchProposal(patch);
+          // Prefer scenario id for presets so cause-aligned templates are used
+          const patchKey = effectiveTarget.startsWith("scenario_")
+            ? effectiveTarget
+            : invId || effectiveTarget;
+          patch = await apiClient.fetchPatchProposal(patchKey);
+          if (!patch && invId !== patchKey) {
+            patch = await apiClient.fetchPatchProposal(invId);
           }
         } catch {
           // Soft fallback when backend returns 400 (no safe patch available)
@@ -429,61 +465,63 @@ export default function Home() {
       }
 
       const activePatchForDiag = getPatchForDiagnosis(
-        result,
+        alignedResult,
         effectiveTarget,
         patch,
         null
       );
       const isNoSafePatchRun =
-        result.status === "diagnosis_available" &&
-        result.confidence >= 0.9 &&
-        (result.has_safe_patch === false || activePatchForDiag === null);
+        alignedResult.status === "diagnosis_available" &&
+        alignedResult.confidence >= 0.9 &&
+        (alignedResult.has_safe_patch === false || activePatchForDiag === null);
 
       // Enforce consistent status label (Scenario D is always insufficient_evidence)
       const recordedStatus =
-        result.status === "insufficient_evidence" || effectiveTarget.includes("scenario_d")
+        alignedResult.status === "insufficient_evidence" || effectiveTarget.includes("scenario_d")
           ? "insufficient_evidence"
           : isNoSafePatchRun
           ? "diagnosis_no_patch"
-          : result.status;
+          : alignedResult.status;
 
-      // Record in recent history using server-measured authoritative duration
-      const serverTimestamp = result.started_at_iso || new Date().toISOString();
-      const durationMs =
-        result.duration_ms || Math.round(performance.now() - startTime);
+      const serverTimestamp = alignedResult.started_at_iso || new Date().toISOString();
 
       const newHistoryItem: InvestigationHistoryItem = {
         id: invId,
         scenarioName: effectiveTarget,
         status: recordedStatus,
-        confidence: result.confidence,
+        confidence: alignedResult.confidence,
         durationMs,
-        diagnosisDurationMs: result.duration_ms || durationMs,
-        lookupDurationMs: result.lookup_duration_ms || (result.is_cached ? durationMs : null),
+        diagnosisDurationMs: durationMs,
+        lookupDurationMs:
+          alignedResult.lookup_duration_ms ||
+          (alignedResult.is_cached ? durationMs : null),
         timestamp: serverTimestamp,
         startedAtIso: serverTimestamp,
         isSample: false,
-        isCached: Boolean(result.is_cached),
-        originalDurationMs: result.original_duration_ms || null,
-        diagnosis: result,
+        isCached: Boolean(alignedResult.is_cached),
+        originalDurationMs: alignedResult.original_duration_ms || null,
+        diagnosis: alignedResult,
         patchProposal: patch,
         verificationReport: null,
       };
 
-      // Store in memory cache for instant inspection
       investigationCache.current.set(invId, {
-        diagnosis: result,
+        diagnosis: alignedResult,
         patchProposal: patch,
         verificationReport: null,
       });
 
-      // Update history in-place so one attempt gives exactly one row
+      // Update panel and history row together
+      setDiagnosis(alignedResult);
+      setPatchProposal(patch);
+      setVerificationReport(null);
+      setInspectedRunId(invId);
+      setActiveRunId(invId);
       setHistory((prev) => {
         const filtered = prev.filter((p) => p.id.toLowerCase() !== invId);
-        return [newHistoryItem, ...filtered];
+        return sortHistoryNewestFirst([newHistoryItem, ...filtered]);
       });
 
-      // Keep live list and server list 100% consistent without reload (Requirement 4)
       void apiClient
         .fetchRecentInvestigations()
         .then((serverRuns) => {
@@ -501,6 +539,8 @@ export default function Home() {
     } finally {
       inFlightRef.current = false;
       setIsInvestigating(false);
+      setInvestigationStep("");
+      setRunStartedAtMs(null);
     }
   };
 
@@ -602,16 +642,19 @@ export default function Home() {
     setShowDemoNotification(true);
     setSelectedPresetId(targetScenario);
     setSelectedScenarioId(targetScenario);
+    const startTime = performance.now();
+    setRunStartedAtMs(startTime);
+    setElapsedSeconds(0);
     setIsInvestigating(true);
+    setInvestigationStep("Evidence Ingestion");
     setErrorMessage(null);
     setDiagnosis(null);
     setPatchProposal(null);
     setVerificationReport(null);
     setInspectedRunId(null);
+    setActiveRunId(null);
     setIsLoadingInspect(false);
     setInspectError(null);
-
-    const startTime = performance.now();
 
     try {
       const idempotencyKey = `demo-${Date.now()}`;
@@ -720,6 +763,8 @@ export default function Home() {
       inFlightRef.current = false;
       setIsInvestigating(false);
       setIsVerifying(false);
+      setInvestigationStep("");
+      setRunStartedAtMs(null);
     }
   };
 
@@ -838,25 +883,75 @@ export default function Home() {
     }
   };
 
-  // Dedicated helper to resolve honest, matching patch diff for custom logs or preset scenarios
+  // Dedicated helper to resolve honest, matching patch diff for custom logs or preset scenarios.
+  // Cause-specific checks run BEFORE healthcheck so inert health_status / healthcheck:{} metadata
+  // from docker inspect never steals the patch for presets C and G.
   const getPatchForDiagnosis = (
     diag: DiagnoseResponse | null,
     scenarioId: string,
     proposal: PatchProposal | null,
     report: VerificationReport | null
   ) => {
-    // 0. If backend explicitly marked that there is no safe patch, strictly return null
     if (diag?.has_safe_patch === false) {
       return null;
     }
 
+    const causeText = [
+      diag?.summary || "",
+      diag?.hypotheses?.[0]?.description || "",
+      ...(diag?.hypotheses?.[0]?.supporting_evidence || []),
+      scenarioId,
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    const fullText = [
+      causeText,
+      ...(diag?.evidence?.map((e) => e.content) || []),
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    const procedureMatchesCause = (proc: string, diff: string): boolean => {
+      if (causeText.includes("rate_limit") || causeText.includes("scenario_g")) {
+        return proc === "verify_syntax" && diff.includes("RATE_LIMIT_BURST");
+      }
+      if (
+        scenarioId.includes("scenario_c") ||
+        (causeText.includes("port") &&
+          (causeText.includes("forward") || causeText.includes("5000")))
+      ) {
+        return proc === "verify_port_mapping" && diff.includes("8000:8000");
+      }
+      if (
+        scenarioId.includes("scenario_b") ||
+        causeText.includes("healthcheck") ||
+        (causeText.includes("/health") && causeText.includes("healthz"))
+      ) {
+        return proc === "verify_healthcheck_endpoint" && diff.includes("/healthz");
+      }
+      if (
+        scenarioId.includes("scenario_a") ||
+        causeText.includes("database_url") ||
+        causeText.includes("redis_url") ||
+        causeText.includes("keyerror")
+      ) {
+        return proc === "verify_env_presence";
+      }
+      return true;
+    };
+
     if (proposal?.diff_unified) {
-      return {
-        diff: proposal.diff_unified,
-        targetFile: proposal.target_file || "docker-compose.yml",
-        explanation: proposal.explanation,
-        procedure: proposal.verification_procedure || "verify_fix",
-      };
+      const proc = proposal.verification_procedure || "verify_fix";
+      if (procedureMatchesCause(proc, proposal.diff_unified)) {
+        return {
+          diff: proposal.diff_unified,
+          targetFile: proposal.target_file || "docker-compose.yml",
+          explanation: proposal.explanation,
+          procedure: proc,
+        };
+      }
+      // Unrelated template from backend — ignore and derive from cause
     }
     if (report?.patch_diff) {
       return {
@@ -867,34 +962,57 @@ export default function Home() {
       };
     }
 
-    // Derive from diagnosis summary, hypotheses and scenario text
-    const contextText = [
-      diag?.summary || "",
-      diag?.hypotheses?.[0]?.description || "",
-      ...(diag?.hypotheses?.[0]?.supporting_evidence || []),
-      ...(diag?.evidence?.map((e) => e.content) || []),
-      scenarioId,
-    ].join(" ");
-
-    const text = contextText.toLowerCase();
-
-    // 1. Unreachable external database/dependency (e.g. ECONNREFUSED 127.0.0.1:5432, postgres down)
-    // No automated safe patch exists for external service unreachable state
+    // Unreachable external database/dependency — no safe automated patch
     if (
-      text.includes("econnrefused") ||
-      text.includes("connection refused") ||
-      text.includes("5432") ||
-      (text.includes("postgres") && !text.includes("scenario_a"))
+      (fullText.includes("econnrefused") || fullText.includes("connection refused")) &&
+      (fullText.includes("5432") ||
+        fullText.includes("postgres") ||
+        fullText.includes("6379") ||
+        fullText.includes("redis"))
     ) {
-      return null;
+      if (!causeText.includes("scenario_a") && !extractEnvVarInfo(causeText)) {
+        return null;
+      }
     }
 
-    // 2. Missing Environment Variable (Scenario A, cache-worker REDIS_URL, etc.)
-    const envInfo = extractEnvVarInfo(contextText);
+    // G: RATE_LIMIT_BURST configuration regression
     if (
-      envInfo ||
-      text.includes("scenario_a")
+      scenarioId.includes("scenario_g") ||
+      causeText.includes("rate_limit_burst") ||
+      causeText.includes("configuration regression")
     ) {
+      return {
+        diff: `--- a/main.py\n+++ b/main.py\n@@ -12,2 +12,2 @@\n-RATE_LIMIT_BURST = "unparsed_string"\n+RATE_LIMIT_BURST = 100`,
+        targetFile: "main.py",
+        explanation:
+          "Fixed configuration regression: set RATE_LIMIT_BURST to valid integer literal 100.",
+        procedure: "verify_syntax",
+      };
+    }
+
+    // C: Port mapping mismatch
+    if (
+      scenarioId.includes("scenario_c") ||
+      causeText.includes("8000:5000") ||
+      (causeText.includes("port") &&
+        (causeText.includes("forward") ||
+          causeText.includes("5000") ||
+          causeText.includes("mismatch")))
+    ) {
+      return {
+        diff: `--- a/docker-compose.yml\n+++ b/docker-compose.yml\n@@ -8,2 +8,2 @@\n     ports:\n-      - "8000:5000"\n+      - "8000:8000"`,
+        targetFile: "docker-compose.yml",
+        explanation:
+          "Aligned container target port in docker-compose.yml from 5000 to 8000 to match application listener.",
+        procedure: "verify_port_mapping",
+      };
+    }
+
+    // A / custom missing env
+    const envInfo = extractEnvVarInfo(
+      [diag?.summary || "", diag?.hypotheses?.[0]?.description || "", scenarioId].join(" ")
+    );
+    if (envInfo || scenarioId.includes("scenario_a") || causeText.includes("keyerror")) {
       const varName = envInfo?.varName || "DATABASE_URL";
       const defaultVal =
         envInfo?.defaultVal ||
@@ -907,12 +1025,15 @@ export default function Home() {
       };
     }
 
-    if (
-      text.includes("health") ||
-      text.includes("healthcheck") ||
-      text.includes("scenario_b") ||
-      text.includes("404")
-    ) {
+    // B: Genuine healthcheck mismatch only (ignore inert health_status / healthcheck:{})
+    const genuineHealthMismatch =
+      scenarioId.includes("scenario_b") ||
+      causeText.includes("healthcheck") ||
+      (causeText.includes("/health") &&
+        (causeText.includes("healthz") ||
+          causeText.includes("404") ||
+          causeText.includes("mismatch")));
+    if (genuineHealthMismatch) {
       return {
         diff: `--- a/docker-compose.yml\n+++ b/docker-compose.yml\n@@ -10,3 +10,3 @@\n     healthcheck:\n-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]\n+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]`,
         targetFile: "docker-compose.yml",
@@ -922,50 +1043,17 @@ export default function Home() {
       };
     }
 
-    if (
-      text.includes("rate_limit_burst") ||
-      text.includes("regression") ||
-      text.includes("scenario_g")
-    ) {
-      return {
-        diff: `--- a/main.py\n+++ b/main.py\n@@ -12,2 +12,2 @@\n-RATE_LIMIT_BURST = "unparsed_string"\n+RATE_LIMIT_BURST = 100`,
-        targetFile: "main.py",
-        explanation:
-          "Fixed configuration regression: set RATE_LIMIT_BURST to valid integer literal 100.",
-        procedure: "verify_syntax",
-      };
-    }
-
-    // 5. Genuine Container Port Mismatch (Scenario C: 8000:5000 vs 8000:8000)
-    // Only offer when scenario_c or an explicit port mismatch is present in diagnosis text
-    if (
-      scenarioId.includes("scenario_c") ||
-      (text.includes("port") && (text.includes("5000") || text.includes("mismatch") || text.includes("listener")))
-    ) {
-      return {
-        diff: `--- a/docker-compose.yml\n+++ b/docker-compose.yml\n@@ -8,2 +8,2 @@\n     ports:\n-      - "8000:5000"\n+      - "8000:8000"`,
-        targetFile: "docker-compose.yml",
-        explanation:
-          "Aligned container target port in docker-compose.yml from 5000 to 8000 to match application listener.",
-        procedure: "verify_port_mapping",
-      };
-    }
-
-    // 6. Memory Limit (Scenario D: OOM / out of memory)
+    // D / OOM — no safe automated patch in product policy for insufficient evidence / OOM classes
     if (
       scenarioId.includes("scenario_d") ||
-      text.includes("oom") ||
-      text.includes("out of memory")
+      scenarioId.includes("scenario_e") ||
+      causeText.includes("oom") ||
+      causeText.includes("out of memory") ||
+      causeText.includes("contradictory")
     ) {
-      return {
-        diff: `--- a/docker-compose.yml\n+++ b/docker-compose.yml\n@@ -12,2 +12,2 @@\n     deploy:\n       resources:\n         limits:\n-          memory: 64M\n+          memory: 512M`,
-        targetFile: "docker-compose.yml",
-        explanation: "Increased container memory limit to 512M to prevent OOM termination.",
-        procedure: "verify_memory_limit",
-      };
+      return null;
     }
 
-    // Default: Strictly return null when no safe patch matches diagnosed root cause class
     return null;
   };
 
@@ -994,6 +1082,7 @@ export default function Home() {
       {/* Top Navigation */}
       <Navbar
         readiness={readiness}
+        isBootstrapping={isBootstrapping}
         onQuickDemo={handleQuickDemo}
         isInvestigating={isInvestigating || isVerifying}
       />
@@ -1086,6 +1175,7 @@ export default function Home() {
         {/* 1. Project Health & Security Summary */}
         <ProjectHealthSummary
           readiness={readiness}
+          isBootstrapping={isBootstrapping || !historyHydrated}
           activeScenario={activeScenario}
           currentTargetName={!activeScenario ? selectedScenarioId : undefined}
           totalDiagnosesCount={history.length}
@@ -1113,21 +1203,39 @@ export default function Home() {
         />
 
         {/* 3. Diagnostic Timeline & Progression State Machine */}
-        {(isInvestigating || diagnosis) && (
+        {(isInvestigating || (!isInvestigating && diagnosis)) && (
           <DiagnosticTimeline
-            diagnosis={diagnosis}
+            diagnosis={isInvestigating ? null : diagnosis}
             isInvestigating={isInvestigating}
             hasPatchVerified={
-              verificationReport?.status === "verified_fixed"
+              !isInvestigating && verificationReport?.status === "verified_fixed"
+            }
+            currentStepLabel={investigationStep}
+            elapsedSeconds={isInvestigating ? elapsedSeconds : undefined}
+            totalDurationMs={
+              !isInvestigating
+                ? (() => {
+                    const lookupId = (
+                      inspectedRunId ||
+                      activeRunId ||
+                      diagnosis?.investigation_id ||
+                      ""
+                    ).toLowerCase();
+                    const row = lookupId
+                      ? history.find((h) => h.id.toLowerCase() === lookupId)
+                      : null;
+                    return row?.durationMs ?? diagnosis?.duration_ms ?? undefined;
+                  })()
+                : undefined
             }
           />
         )}
 
-        {/* 4. Investigation Workspace Results */}
-        {(diagnosis || isLoadingInspect || inspectError) && (
+        {/* 4. Investigation Workspace Results — only for the current/inspected run */}
+        {!isInvestigating && (diagnosis || isLoadingInspect || inspectError) && (
           <div
             id="diagnostic-results-section"
-            key={inspectedRunId || "active-run"}
+            key={inspectedRunId || activeRunId || "active-run"}
             className="scroll-mt-8"
           >
             {/* Historical inspection banner */}
@@ -1262,6 +1370,53 @@ export default function Home() {
                   );
                 })()}
 
+                {/* Proposed patch + verify control shown directly in the result panel */}
+                {canPatch && !isNoSafePatch && activePatch && (
+                  <div id="patch-review-section" className="mt-8">
+                    <PatchReviewCard
+                      patchDiff={activePatch.diff}
+                      targetFile={activePatch.targetFile}
+                      explanation={activePatch.explanation}
+                      verificationProcedure={activePatch.procedure}
+                      isAppliedToWorkingCopy={false}
+                      onApproveAndVerify={handleApproveAndVerify}
+                      onRejectPatch={() => {
+                        setVerificationReport({
+                          status: "patch_rejected",
+                          test_output: "Patch rejected by user during review. Working copy preserved untouched.",
+                          expected_criteria: "Explicit user approval",
+                          attempts: 0,
+                          reverted: true,
+                          duration_ms: 0,
+                        });
+                      }}
+                      isVerifying={isVerifying}
+                    />
+                  </div>
+                )}
+
+                {/* Verification Report Card (shown inline with diagnosis) */}
+                {verificationReport && (() => {
+                  const activeItem = inspectedRunId
+                    ? history.find((h) => h.id === inspectedRunId)
+                    : (diagnosis.investigation_id
+                        ? history.find((h) => h.id === diagnosis.investigation_id)
+                        : null);
+                  const totalDuration = activeItem?.durationMs || verificationReport.duration_ms;
+                  const isCachedRun = activeItem?.isCached;
+
+                  return (
+                    <VerificationReportCard
+                      report={verificationReport}
+                      scenarioName={selectedScenarioId}
+                      onRetry={() => handleApproveAndVerify(true)}
+                      isVerifying={isVerifying}
+                      totalDurationMs={totalDuration}
+                      isCached={isCachedRun}
+                    />
+                  );
+                })()}
+
                 {/* Collected Empirical Evidence */}
                 <EvidenceViewer evidence={diagnosis.evidence} />
 
@@ -1338,52 +1493,6 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* 3. Patch Review Section (Only when empirical evidence threshold is met and a valid safe patch exists) */}
-                {canPatch && !isNoSafePatch && activePatch && (
-                  <div id="patch-review-section" className="mt-8">
-                    <PatchReviewCard
-                      patchDiff={activePatch.diff}
-                      targetFile={activePatch.targetFile}
-                      explanation={activePatch.explanation}
-                      verificationProcedure={activePatch.procedure}
-                      isAppliedToWorkingCopy={false}
-                      onApproveAndVerify={handleApproveAndVerify}
-                      onRejectPatch={() => {
-                        setVerificationReport({
-                          status: "patch_rejected",
-                          test_output: "Patch rejected by user during review. Working copy preserved untouched.",
-                          expected_criteria: "Explicit user approval",
-                          attempts: 0,
-                          reverted: true,
-                          duration_ms: 0,
-                        });
-                      }}
-                      isVerifying={isVerifying}
-                    />
-                  </div>
-                )}
-
-                {/* Verification Report Card */}
-                {verificationReport && (() => {
-                  const activeItem = inspectedRunId
-                    ? history.find((h) => h.id === inspectedRunId)
-                    : (diagnosis.investigation_id
-                        ? history.find((h) => h.id === diagnosis.investigation_id)
-                        : null);
-                  const totalDuration = activeItem?.durationMs || verificationReport.duration_ms;
-                  const isCached = activeItem?.isCached;
-
-                  return (
-                    <VerificationReportCard
-                      report={verificationReport}
-                      scenarioName={selectedScenarioId}
-                      onRetry={() => handleApproveAndVerify(true)}
-                      isVerifying={isVerifying}
-                      totalDurationMs={totalDuration}
-                      isCached={isCached}
-                    />
-                  );
-                })()}
               </>
             )}
           </div>

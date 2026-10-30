@@ -163,10 +163,25 @@ test("diagnosis_no_patch status yields DIAGNOSIS AVAILABLE, NO PATCH badge and n
   );
   assert.strictEqual(config.badgeText, "DIAGNOSIS AVAILABLE, NO PATCH");
   assert.strictEqual(config.headline, "Diagnosis Available (No Safe Patch Available)");
-  assert.strictEqual(config.nextActionText, "Ensure PostgreSQL is running and reachable on port 5432");
+  assert.strictEqual(
+    config.nextActionText,
+    "Ensure PostgreSQL is running and reachable on port 5432"
+  );
   assert.strictEqual(config.isConclusive, true);
   assert.strictEqual(config.isNoSafePatch, true);
   assert.strictEqual(config.isVerified, false);
+});
+
+test("diagnosis_no_patch replaces apply-minimal next action with manual investigation", () => {
+  const config = getStatusPanelConfig(
+    "diagnosis_no_patch",
+    null,
+    0.95,
+    "Apply minimal configuration or code patch to resolve root cause."
+  );
+  assert.ok(!/apply minimal/i.test(config.nextActionText));
+  assert.match(config.nextActionText, /manually investigate/i);
+  assert.strictEqual(config.isNoSafePatch, true);
 });
 
 

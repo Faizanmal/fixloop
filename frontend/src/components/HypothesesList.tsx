@@ -80,7 +80,7 @@ export function HypothesesList({
             >
               {panelConfig.badgeText}
             </span>
-            <span className="text-xs text-slate-400 font-mono">
+            <span className="text-xs text-slate-400 font-mono break-words max-w-full sm:max-w-md">
               Next Action: {panelConfig.nextActionText}
             </span>
             {isCached && (
@@ -182,12 +182,12 @@ export function HypothesesList({
                       : "border-slate-800 bg-slate-950/40 hover:border-slate-700 hover:bg-slate-900/60"
                   }`}
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-mono text-[11px] font-bold text-cyan-300">
+                  <div className="flex items-start justify-between gap-2 mb-2 min-w-0">
+                    <span className="font-mono text-[11px] font-bold text-cyan-300 truncate min-w-0 flex-1" title={`#${idx + 1} • ${hypId}`}>
                       #{idx + 1} • {hypId}
                     </span>
                     <span
-                      className={`font-mono text-xs font-semibold ${
+                      className={`font-mono text-[10px] sm:text-xs font-semibold shrink-0 whitespace-nowrap ${
                         hypPct >= 90
                           ? "text-emerald-400"
                           : hypPct >= 70
@@ -195,10 +195,10 @@ export function HypothesesList({
                           : "text-purple-400"
                       }`}
                     >
-                      Hypothesis Score: {hypPct}%
+                      Score: {hypPct}%
                     </span>
                   </div>
-                  <p className="text-xs text-slate-200 font-medium line-clamp-2 leading-relaxed mb-3">
+                  <p className="text-xs text-slate-200 font-medium line-clamp-2 leading-relaxed mb-3 break-words">
                     {hyp.description}
                   </p>
                   <div className="flex items-center gap-3 text-[11px] text-slate-400">
@@ -244,20 +244,20 @@ export function HypothesesList({
                   Active Hypothesis Detailed Breakdown
                 </span>
                 <div className="rounded-lg border border-slate-800 bg-black/50 p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-mono text-xs text-cyan-400 font-bold">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2 min-w-0">
+                    <span className="font-mono text-xs text-cyan-400 font-bold truncate min-w-0" title={activeHypothesis.id || `HYP-${selectedHypothesisIndex + 1}`}>
                       {activeHypothesis.id || `HYP-${selectedHypothesisIndex + 1}`}
                     </span>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs text-slate-300 bg-slate-800 border border-slate-700 px-2 py-0.5 rounded">
-                        Hypothesis Score: {((activeHypothesis.confidence ?? 0) * 100).toFixed(0)}%
+                    <div className="flex items-center gap-2 flex-wrap shrink-0">
+                      <span className="font-mono text-[10px] sm:text-xs text-slate-300 bg-slate-800 border border-slate-700 px-2 py-0.5 rounded whitespace-nowrap">
+                        Score: {((activeHypothesis.confidence ?? 0) * 100).toFixed(0)}%
                       </span>
-                      <span className="font-mono text-xs text-slate-400 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded">
+                      <span className="font-mono text-[10px] sm:text-xs text-slate-400 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded whitespace-nowrap">
                         Calibrated: {confidencePct}%
                       </span>
                     </div>
                   </div>
-                  <p className="text-sm text-slate-100 font-medium leading-relaxed">
+                  <p className="text-sm text-slate-100 font-medium leading-relaxed break-words">
                     {activeHypothesis.description}
                   </p>
                 </div>
@@ -421,7 +421,7 @@ export function HypothesesList({
                 onClick={onProceedToPatch}
                 className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-md shadow-cyan-950/40 hover:from-cyan-400 hover:to-indigo-500 transition-all cursor-pointer font-mono shrink-0"
               >
-                <span>Review Patch & Verify in Sandbox</span>
+                <span>Run Sandbox Verification</span>
                 <ArrowRight className="h-4 w-4" />
               </button>
             ) : panelConfig.isInsufficient ? (

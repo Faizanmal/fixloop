@@ -13,6 +13,7 @@ import {
 
 interface ProjectHealthSummaryProps {
   readiness: SystemReadiness | null;
+  isBootstrapping?: boolean;
   activeScenario: ScenarioInfo | null;
   currentTargetName?: string;
   totalDiagnosesCount: number;
@@ -20,11 +21,12 @@ interface ProjectHealthSummaryProps {
 
 export function ProjectHealthSummary({
   readiness,
+  isBootstrapping = false,
   activeScenario,
   currentTargetName,
   totalDiagnosesCount,
 }: ProjectHealthSummaryProps) {
-  const isInitialLoad = readiness === null;
+  const isInitialLoad = isBootstrapping || readiness === null;
   const isUnreachable =
     readiness?.isUnreachable === true ||
     (readiness !== null &&

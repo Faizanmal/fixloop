@@ -17,17 +17,19 @@ import {
 
 interface NavbarProps {
   readiness: SystemReadiness | null;
+  isBootstrapping?: boolean;
   onQuickDemo: () => void;
   isInvestigating: boolean;
 }
 
 export function Navbar({
   readiness,
+  isBootstrapping = false,
   onQuickDemo,
   isInvestigating,
 }: NavbarProps) {
   const [showBenchmark, setShowBenchmark] = useState<boolean>(false);
-  const isInitialLoad = readiness === null;
+  const isInitialLoad = isBootstrapping || readiness === null;
   const isUnreachable =
     readiness?.isUnreachable === true ||
     (readiness !== null &&
@@ -43,14 +45,14 @@ export function Navbar({
 
   return (
     <header className="sticky top-0 z-50 border-b border-slate-800 bg-[#090d16]/95 backdrop-blur-md">
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-y-2 px-4 py-3 sm:px-6 lg:px-8">
         {/* Brand */}
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-cyan-600 to-indigo-600 shadow-lg shadow-cyan-950/50 ring-1 ring-cyan-400/40">
+        <div className="flex items-center gap-3 min-w-0 shrink">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-cyan-600 to-indigo-600 shadow-lg shadow-cyan-950/50 ring-1 ring-cyan-400/40">
             <ShieldAlert className="h-5 w-5 text-white" />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-lg font-bold tracking-tight text-white font-mono">
                 FixLoop
               </span>
@@ -67,8 +69,8 @@ export function Navbar({
           </div>
         </div>
 
-        {/* Model, Runtime & Actions */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        {/* Model, Runtime & Actions — wrap/stack on ~390px so Benchmark & Demo are never clipped */}
+        <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3 w-full sm:w-auto">
           {/* Target Model Badge */}
           <div
             className="hidden lg:flex items-center gap-2 rounded-lg bg-slate-900/90 px-2.5 py-1.5 text-xs text-slate-300 ring-1 ring-slate-800"
@@ -165,20 +167,21 @@ export function Navbar({
             href="/docs"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900/60 px-2 sm:px-2.5 py-1.5 text-xs font-mono text-slate-400 hover:text-slate-200 hover:border-slate-700 transition-colors"
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900/60 px-2 sm:px-2.5 py-1.5 text-xs font-mono text-slate-400 hover:text-slate-200 hover:border-slate-700 transition-colors shrink-0"
             title="Open FastAPI Swagger Documentation (forwarded via Next.js rewrites)"
           >
-            <span>API Docs</span>
+            <span className="hidden sm:inline">API Docs</span>
+            <span className="sm:hidden">API</span>
             <ExternalLink className="h-3 w-3" />
           </a>
 
           {/* Benchmark Scorecard Button - reachable on all screen sizes */}
           <button
             onClick={() => setShowBenchmark(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-700/60 bg-indigo-950/40 hover:bg-indigo-900/60 px-2 sm:px-2.5 py-1.5 text-xs font-mono font-medium text-indigo-300 transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-700/60 bg-indigo-950/40 hover:bg-indigo-900/60 px-2 sm:px-2.5 py-1.5 text-xs font-mono font-medium text-indigo-300 transition-colors cursor-pointer shrink-0"
             title="View reproducible 7-scenario benchmark scorecard"
           >
-            <Trophy className="h-3.5 w-3.5 text-amber-400" />
+            <Trophy className="h-3.5 w-3.5 text-amber-400 shrink-0" />
             <span>Benchmark</span>
           </button>
 
@@ -186,11 +189,11 @@ export function Navbar({
           <button
             onClick={onQuickDemo}
             disabled={isInvestigating}
-            className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-indigo-600 px-3.5 py-1.5 text-xs font-mono font-bold text-white shadow-md shadow-cyan-950/50 hover:from-cyan-400 hover:to-indigo-500 disabled:opacity-50 transition-all cursor-pointer select-none active:scale-[0.98]"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-indigo-600 px-2.5 sm:px-3.5 py-1.5 text-xs font-mono font-bold text-white shadow-md shadow-cyan-950/50 hover:from-cyan-400 hover:to-indigo-500 disabled:opacity-50 transition-all cursor-pointer select-none active:scale-[0.98] shrink-0 max-w-full"
             title="Execute complete Scenario B diagnostic and verification demo workflow"
           >
-            <Sparkles className="h-3.5 w-3.5" />
-            <span>3-Min Judge Demo</span>
+            <Sparkles className="h-3.5 w-3.5 shrink-0" />
+            <span className="whitespace-nowrap">3-Min Judge Demo</span>
           </button>
         </div>
       </div>

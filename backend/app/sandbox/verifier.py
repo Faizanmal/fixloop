@@ -28,6 +28,7 @@ from backend.app.agent.patcher import (
     PatchProposal,
     PatchValidator,
     PurePythonDiffPatcher,
+    patch_procedure_matches_cause,
 )
 from backend.app.core.models import (
     DiagnoseHypothesis,
@@ -404,7 +405,33 @@ class ControlledVerificationPipeline:
                 duration_ms=int((time.perf_counter() - start_time) * 1000),
             )
 
-        # Step 3: Validate patch proposal against security rules
+        # Step 3: Reject template patches whose procedure does not match diagnosed cause
+        if not patch_procedure_matches_cause(
+            hypothesis.description,
+            proposal.verification_procedure,
+            proposal.diff_unified,
+        ):
+            return VerificationReport(
+                status=VerificationStatus.VERIFICATION_FAILED,
+                patch_id=proposal.id,
+                target_file=proposal.target_file,
+                patch_diff=proposal.diff_unified,
+                test_output=(
+                    "Verification failed: Candidate patch procedure does not address "
+                    "the diagnosed root cause."
+                ),
+                expected_criteria=(
+                    "Patch verification_procedure and diff must match diagnosed root cause"
+                ),
+                failure_evidence=(
+                    f"Patch mismatch: procedure '{proposal.verification_procedure}' does not "
+                    f"resolve diagnosed cause '{hypothesis.description}'. Changes reverted"
+                ),
+                reverted=True,
+                duration_ms=int((time.perf_counter() - start_time) * 1000),
+            )
+
+        # Step 4: Validate patch proposal against security rules
         is_valid, validation_err = PatchValidator.validate_patch(project_root, proposal)
         if not is_valid:
             return VerificationReport(
@@ -417,7 +444,7 @@ class ControlledVerificationPipeline:
                 duration_ms=int((time.perf_counter() - start_time) * 1000),
             )
 
-        # Step 4: Human approval gate if required
+        # Step 5: Human approval gate if required
         if proposal.requires_human_approval and not user_approved:
             return VerificationReport(
                 status=VerificationStatus.PATCH_REJECTED,
@@ -429,7 +456,7 @@ class ControlledVerificationPipeline:
                 duration_ms=int((time.perf_counter() - start_time) * 1000),
             )
 
-        # Step 5: Execute in disposable sandbox with at most max_retries
+        # Step 6: Execute in disposable sandbox with at most max_retries
         attempts = 0
         last_result: VerificationExecutionResult | None = None
 

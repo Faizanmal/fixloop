@@ -123,11 +123,16 @@ export function getStatusPanelConfig(
     normStatus === "no_safe_patch" ||
     normStatus.includes("no patch")
   ) {
+    const patchedFallback =
+      fallbackNextAction &&
+      !/apply minimal configuration or code patch/i.test(fallbackNextAction)
+        ? fallbackNextAction
+        : "Manually investigate the diagnosed root cause; no automated safe patch is available";
     return {
       badgeText: "DIAGNOSIS AVAILABLE, NO PATCH",
       badgeClassName: "bg-amber-500/10 text-amber-400 border-amber-500/30",
       headline: "Diagnosis Available (No Safe Patch Available)",
-      nextActionText: fallbackNextAction || "Ensure database/dependency is running or reachable",
+      nextActionText: patchedFallback,
       detailMessage: "Root cause diagnosed, but no automated safe patch exists for this external dependency or infrastructure state.",
       isConclusive: true,
       isInsufficient: false,

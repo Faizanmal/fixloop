@@ -12,36 +12,60 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { formatDuration } from "@/lib/utils";
 
 interface DiagnosticTimelineProps {
   diagnosis: DiagnoseResponse | null;
   isInvestigating: boolean;
   hasPatchVerified: boolean;
+  currentStepLabel?: string;
+  elapsedSeconds?: number;
+  totalDurationMs?: number;
 }
 
 export const DiagnosticTimeline = React.memo(function DiagnosticTimeline({
   diagnosis,
   isInvestigating,
   hasPatchVerified,
+  currentStepLabel,
+  elapsedSeconds,
+  totalDurationMs,
 }: DiagnosticTimelineProps) {
   const probesCount = diagnosis?.audit_log?.probes_executed?.length ?? (
     diagnosis?.evidence.filter((e) => e.source.includes("probe") || e.source.includes("tool:")).length ?? 0
   );
+
+  const stepName = (currentStepLabel || "").toLowerCase();
+  const activeStepId = isInvestigating
+    ? stepName.includes("patch")
+      ? 4
+      : stepName.includes("hypothesis")
+      ? 4
+      : stepName.includes("prob")
+      ? 3
+      : stepName.includes("config")
+      ? 2
+      : 1
+    : diagnosis
+    ? hasPatchVerified
+      ? 5
+      : 4
+    : 0;
 
   const steps = [
     {
       id: 1,
       name: "Evidence Ingestion",
       desc: "Container logs & inspect metadata parsed safely without disclosing secrets",
-      completed: !!diagnosis || isInvestigating,
-      active: isInvestigating && !diagnosis,
+      completed: !!diagnosis || (isInvestigating && activeStepId > 1),
+      active: isInvestigating && activeStepId === 1,
     },
     {
       id: 2,
       name: "Configuration Audit",
       desc: "Docker Compose, Dockerfile & environment variables inspected",
-      completed: !!diagnosis,
-      active: false,
+      completed: !!diagnosis || (isInvestigating && activeStepId > 2),
+      active: isInvestigating && activeStepId === 2,
     },
     {
       id: 3,
@@ -50,16 +74,20 @@ export const DiagnosticTimeline = React.memo(function DiagnosticTimeline({
         ? `${probesCount} allowlisted HTTP/TCP probe(s) dispatched`
         : diagnosis?.status === "insufficient_evidence"
         ? "Local probes evaluated and exhausted; external dependency prevented local deterministic probing"
+        : isInvestigating
+        ? "Evaluating allowlisted probes against current hypotheses…"
         : "Probing evaluated (no active probe required for deterministic crash)",
-      completed: !!diagnosis,
-      active: false,
+      completed: !!diagnosis || (isInvestigating && activeStepId > 3),
+      active: isInvestigating && activeStepId === 3,
     },
     {
       id: 4,
       name: "Hypothesis Ranking",
-      desc: "Evidence-weighted calibrated confidence & uncertainty bounds formulated",
+      desc: isInvestigating && activeStepId === 4
+        ? currentStepLabel || "Ranking evidence-weighted hypotheses…"
+        : "Evidence-weighted calibrated confidence & uncertainty bounds formulated",
       completed: !!diagnosis,
-      active: false,
+      active: isInvestigating && activeStepId === 4,
     },
     {
       id: 5,
@@ -70,20 +98,26 @@ export const DiagnosticTimeline = React.memo(function DiagnosticTimeline({
     },
   ];
 
+  const progressBadge = isInvestigating
+    ? `Step ${activeStepId}/5 · ${currentStepLabel || "Running"} · ${elapsedSeconds ?? 0}s`
+    : diagnosis
+    ? typeof totalDurationMs === "number" && totalDurationMs > 0
+      ? `Completed in ${formatDuration(totalDurationMs)}`
+      : "Investigation Completed"
+    : null;
+
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/90 p-5 mb-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <div>
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
             <span className="rounded-full bg-cyan-500/10 border border-cyan-500/30 px-2.5 py-0.5 text-xs font-mono font-bold text-cyan-400">
               STATE MACHINE PROGRESSION
             </span>
             {isInvestigating ? (
-              <Badge variant="warning">
-                Active Diagnostic Cycle Running...
-              </Badge>
+              <Badge variant="warning">{progressBadge}</Badge>
             ) : diagnosis ? (
-              <Badge variant="success">Investigation Completed</Badge>
+              <Badge variant="success">{progressBadge}</Badge>
             ) : null}
           </div>
           <h3 className="text-base font-bold text-white flex items-center gap-2">
@@ -91,7 +125,9 @@ export const DiagnosticTimeline = React.memo(function DiagnosticTimeline({
             Diagnostic Timeline & Investigation Lifecycle
           </h3>
           <p className="text-xs text-slate-400 mt-0.5">
-            Strict allowlist execution bounds. Bounded iterations prevent runaway tool loops.
+            {isInvestigating
+              ? `Live cycle: ${currentStepLabel || "Active Diagnostic Cycle"} · elapsed ${elapsedSeconds ?? 0}s`
+              : "Strict allowlist execution bounds. Bounded iterations prevent runaway tool loops."}
           </p>
         </div>
 
@@ -121,7 +157,7 @@ export const DiagnosticTimeline = React.memo(function DiagnosticTimeline({
                 {st.completed ? (
                   <Check className="h-4 w-4 text-emerald-400" />
                 ) : st.active ? (
-                  <div className="h-2 w-2 rounded-full bg-cyan-400" />
+                  <div className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse" />
                 ) : (
                   <Clock className="h-3.5 w-3.5 text-slate-600" />
                 )}
@@ -151,7 +187,6 @@ export const DiagnosticTimeline = React.memo(function DiagnosticTimeline({
           </div>
 
           <div className="space-y-1.5 max-h-40 overflow-y-auto text-slate-300 text-[11px] py-1">
-            {/* Show Probes from audit log or evidence */}
             {diagnosis.evidence
               .filter((e) => e.source.includes("probe") || e.source.includes("tool:"))
               .map((probe, i) => (
@@ -165,7 +200,6 @@ export const DiagnosticTimeline = React.memo(function DiagnosticTimeline({
                 </div>
               ))}
 
-            {/* If no active probe was required */}
             {diagnosis.evidence.filter((e) => e.source.includes("probe") || e.source.includes("tool:")).length === 0 && (
               diagnosis.status === "insufficient_evidence" ? (
                 <div className="text-purple-300 bg-purple-950/20 p-2.5 rounded border border-purple-800/40 text-[11px] space-y-1">

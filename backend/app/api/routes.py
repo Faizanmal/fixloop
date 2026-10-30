@@ -79,25 +79,30 @@ def _is_test_session() -> bool:
 
 
 def _generate_next_inv_id(client_last_id: str | None = None) -> str:
-    """Generate monotonically increasing run IDs like inv-0001, inv-0002 without colliding across server restarts."""
+    """Generate never-repeating run IDs (inv-NNNN) that survive backend restarts.
+
+    Uses a disk-backed counter plus max(memory DB, client-reported high-water mark)
+    so new runs never reuse IDs already present in history.
+    """
     global _PERSISTENT_COUNTER
     max_id = _PERSISTENT_COUNTER
 
     # 1. Scan memory database
     for key in INVESTIGATIONS_DB:
-        match = re.search(r"(\d+)", key)
+        match = re.search(r"inv-(\d+)", key, re.IGNORECASE)
         if match:
-            try:
-                max_id = max(max_id, int(match.group(1)))
-            except ValueError:
-                pass
-
-    # 2. Check client's highest seen run ID to prevent browser localStorage collisions
-    if client_last_id:
-        match_client = re.search(r"(\d+)", str(client_last_id))
-        if match_client:
             with contextlib.suppress(ValueError):
-                max_id = max(max_id, int(match_client.group(1)))
+                max_id = max(max_id, int(match.group(1)))
+
+    # 2. Check client's highest seen run ID (may be a single id or comma-separated max)
+    if client_last_id:
+        for part in re.findall(r"inv-(\d+)", str(client_last_id), re.IGNORECASE):
+            with contextlib.suppress(ValueError):
+                max_id = max(max_id, int(part))
+        # Also accept a bare high-water integer from the client
+        if re.fullmatch(r"\d+", str(client_last_id).strip()):
+            with contextlib.suppress(ValueError):
+                max_id = max(max_id, int(str(client_last_id).strip()))
 
     # 3. Read persistent counter file if available
     if _COUNTER_FILE_PATH.exists():
@@ -105,10 +110,34 @@ def _generate_next_inv_id(client_last_id: str | None = None) -> str:
             stored_val = int(_COUNTER_FILE_PATH.read_text(encoding="utf-8").strip())
             max_id = max(max_id, stored_val)
 
+    # 4. Also consult persisted state file counter
+    if _STATE_FILE_PATH.exists():
+        with contextlib.suppress(Exception):
+            raw = json.loads(_STATE_FILE_PATH.read_text(encoding="utf-8"))
+            if "persistent_counter" in raw:
+                max_id = max(max_id, int(raw["persistent_counter"]))
+            for key in (raw.get("investigations") or {}):
+                match = re.search(r"inv-(\d+)", key, re.IGNORECASE)
+                if match:
+                    max_id = max(max_id, int(match.group(1)))
+
     _PERSISTENT_COUNTER = max_id + 1
     with contextlib.suppress(Exception):
         _COUNTER_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
         _COUNTER_FILE_PATH.write_text(str(_PERSISTENT_COUNTER), encoding="utf-8")
+
+    # Persist counter into state file eagerly so restarts cannot rewind
+    with contextlib.suppress(Exception):
+        if not _is_test_session():
+            existing: dict[str, Any] = {}
+            if _STATE_FILE_PATH.exists():
+                with contextlib.suppress(Exception):
+                    existing = json.loads(_STATE_FILE_PATH.read_text(encoding="utf-8"))
+            existing["persistent_counter"] = _PERSISTENT_COUNTER
+            _STATE_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _STATE_FILE_PATH.write_text(
+                json.dumps(existing, indent=2), encoding="utf-8"
+            )
 
     return f"inv-{_PERSISTENT_COUNTER:04d}"
 
@@ -457,6 +486,7 @@ async def _compute_diagnosis(
         is_conclusive = result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
         is_insufficient = result.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
         has_safe_patch = None
+        next_action = result.next_action
         if is_conclusive:
             has_safe_patch = request.service_name in {
                 "scenario_a_missing_env",
@@ -471,6 +501,16 @@ async def _compute_diagnosis(
                 "scenario_2_port_mismatch",
                 "scenario_3_missing_env",
             }
+            if has_safe_patch is False:
+                next_action = (
+                    result.next_action
+                    if result.next_action
+                    and "apply minimal" not in result.next_action.lower()
+                    else (
+                        "Manually investigate the diagnosed root cause; "
+                        "no automated safe patch is available for this failure class."
+                    )
+                )
         diag_resp = DiagnoseResponse(
             status=result.status,
             summary=result.summary,
@@ -479,7 +519,7 @@ async def _compute_diagnosis(
             recommended_tests=result.recommended_tests,
             missing_information=result.missing_information,
             confidence=result.confidence,
-            next_action=result.next_action,
+            next_action=next_action,
             has_safe_patch=has_safe_patch,
             investigation_id=inv_id,
             idempotency_key=request.idempotency_key,
@@ -591,6 +631,16 @@ async def _compute_diagnosis(
                 scenario_name=request.service_name or "custom_target",
             )
             has_safe_patch = alignment.get("has_safe_patch", False)
+            if has_safe_patch is False:
+                diagnosis.next_action = (
+                    diagnosis.next_action
+                    if diagnosis.next_action
+                    and "apply minimal" not in diagnosis.next_action.lower()
+                    else (
+                        "Manually investigate the diagnosed root cause; "
+                        "no automated safe patch is available for this failure class."
+                    )
+                )
         diagnosis.has_safe_patch = has_safe_patch
         diagnosis.investigation_id = inv_id
         diagnosis.idempotency_key = request.idempotency_key
@@ -1090,17 +1140,22 @@ async def propose_patch(scenario_name: str) -> PatchProposal:
     # If scenario_dir is not found, check if it's an ad-hoc custom log run, investigation id, or custom service name
     context_parts = [scenario_name]
     raw_logs_parts: list[str] = []
+    resolved_scenario = scenario_name
     if scenario_name in INVESTIGATION_DIAGNOSES:
         d = INVESTIGATION_DIAGNOSES[scenario_name]
         context_parts.append(d.summary)
         context_parts.extend(h.description for h in d.hypotheses)
         for h in d.hypotheses:
             context_parts.extend(h.supporting_evidence)
+        # Prefer hypothesis text over raw evidence blobs that contain inert healthcheck:{}
+        # (evidence metadata is still included for env/port signals, but after descriptions)
         context_parts.extend(e.content for e in d.evidence)
         raw_logs_parts.extend(e.content for e in d.evidence)
 
     if scenario_name in INVESTIGATIONS_DB:
         inv = INVESTIGATIONS_DB[scenario_name]
+        resolved_scenario = inv.scenario_name or scenario_name
+        context_parts.append(resolved_scenario)
         if inv.outcome_summary:
             context_parts.append(inv.outcome_summary)
         for ev in inv.evidence_store:
@@ -1115,6 +1170,8 @@ async def propose_patch(scenario_name: str) -> PatchProposal:
     else:
         for inv in reversed(list(INVESTIGATIONS_DB.values())):
             if inv.scenario_name == scenario_name or inv.id == scenario_name:
+                resolved_scenario = inv.scenario_name or scenario_name
+                context_parts.append(resolved_scenario)
                 if inv.outcome_summary:
                     context_parts.append(inv.outcome_summary)
                 for ev in inv.evidence_store:
@@ -1128,12 +1185,13 @@ async def propose_patch(scenario_name: str) -> PatchProposal:
                         context_parts.extend(h.supporting_evidence)
                 break
 
+    # Prefer hypothesis descriptions (ranked first in context) for cause matching
     full_context = " ".join(context_parts)
     raw_logs = " ".join(raw_logs_parts)
     alignment = evaluate_custom_patch_alignment(
         full_context=full_context,
         raw_logs=raw_logs,
-        scenario_name=scenario_name,
+        scenario_name=resolved_scenario,
     )
     if (
         not alignment.get("has_safe_patch")
@@ -1218,8 +1276,12 @@ async def list_scenarios():
 @router.get("/investigations", tags=["Investigations"])
 @router.get("/api/investigations", tags=["Investigations"], include_in_schema=False)
 async def list_investigations() -> list[InvestigationState]:
-    """List all recorded investigation runs."""
-    return list(INVESTIGATIONS_DB.values())
+    """List all recorded investigation runs, newest created time first."""
+    return sorted(
+        INVESTIGATIONS_DB.values(),
+        key=lambda inv: inv.started_at or inv.updated_at or utc_now(),
+        reverse=True,
+    )
 
 
 @router.post(
