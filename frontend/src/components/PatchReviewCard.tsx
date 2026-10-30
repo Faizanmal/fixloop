@@ -134,7 +134,7 @@ export function PatchReviewCard({
             Unified Diff Review: <span className="font-mono text-cyan-300">{targetFile}</span>
           </h3>
           <p className="text-xs text-slate-300 mt-1">
-            {explanation || "Targeted minimal patch generated from empirical diagnosis. Inspected for safety before isolated sandbox execution."}
+            {explanation || "Targeted minimal patch generated from empirical diagnosis. Inspected for safety before file-check verification."}
           </p>
         </div>
 
@@ -154,7 +154,7 @@ export function PatchReviewCard({
               ) : (
                 <span className="text-emerald-400 flex items-center gap-1">
                   <CheckCircle2 className="h-3 w-3" />
-                  UNTOUCHED (Sandbox Only)
+                  UNTOUCHED (File-Check Only)
                 </span>
               )}
             </div>
@@ -215,7 +215,7 @@ export function PatchReviewCard({
             onChange={(e) => setUserApproved(e.target.checked)}
             className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-cyan-500"
           />
-          <span>Explicit Human Approval Granted for Disposable Sandbox Verification</span>
+          <span>Explicit Human Approval Granted for File-Check Verification</span>
         </label>
 
         <div className="flex items-center gap-2.5">
@@ -236,12 +236,12 @@ export function PatchReviewCard({
             {isVerifying ? (
               <>
                 <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                <span>Testing in Sandbox...</span>
+                <span>Running File-Check...</span>
               </>
             ) : (
               <>
                 <Play className="h-3.5 w-3.5 fill-white" />
-                <span>Run Sandbox Verification</span>
+                <span>Run File-Check Verification</span>
               </>
             )}
           </button>

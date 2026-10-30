@@ -366,14 +366,14 @@ export function HypothesesList({
                 <>
                   <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
                   <span className="text-emerald-300 font-semibold">
-                    Verified fixed in sandbox. Ready for production review.
+                    Verified fixed in file-check mode. Ready for production review.
                   </span>
                 </>
               ) : panelConfig.isVerificationFailed ? (
                 <>
                   <XCircle className="h-4 w-4 text-rose-400 shrink-0" />
                   <span className="text-rose-300 font-semibold">
-                    Sandbox verification rejected patch: candidate fix does not resolve the diagnosed failure.
+                    File-check verification rejected patch: candidate fix does not resolve the diagnosed failure.
                   </span>
                 </>
               ) : panelConfig.isNoSafePatch ? (
@@ -421,7 +421,7 @@ export function HypothesesList({
                 onClick={onProceedToPatch}
                 className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-md shadow-cyan-950/40 hover:from-cyan-400 hover:to-indigo-500 transition-all cursor-pointer font-mono shrink-0"
               >
-                <span>Run Sandbox Verification</span>
+                <span>Run File-Check Verification</span>
                 <ArrowRight className="h-4 w-4" />
               </button>
             ) : panelConfig.isInsufficient ? (

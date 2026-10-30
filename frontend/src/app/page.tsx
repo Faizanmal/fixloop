@@ -1103,7 +1103,7 @@ export default function Home() {
                 </h4>
                 <p className="text-xs text-slate-300 mt-0.5 leading-relaxed">
                   {scenarios.find((s) => s.id === demoScenario)?.description ||
-                    "Demonstrating complete end-to-end cycle: Evidence Ingestion &rarr; Root-Cause Diagnosis &rarr; Minimal Patch Diff &rarr; Sandboxed Verification."}
+                    "Demonstrating complete end-to-end cycle: Evidence Ingestion &rarr; Root-Cause Diagnosis via Nebius Token Factory / NVIDIA Nemotron-3-Nano &rarr; Minimal Patch Diff &rarr; File-Check Verification."}
                 </p>
               </div>
             </div>
@@ -1532,7 +1532,7 @@ export default function Home() {
               Zero Shell Injection
             </span>
             <span>•</span>
-            <span>Isolated Sandbox Verification</span>
+            <span>File-Check Verification (No Docker Socket)</span>
           </div>
         </div>
       </footer>

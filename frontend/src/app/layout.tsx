@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "FixLoop | Evidence-Driven Autonomous Debugging Agent",
   description:
-    "Autonomous investigation, root cause diagnosis, and sandboxed patch verification for Dockerized applications.",
+    "Autonomous investigation, root-cause diagnosis, and file-check patch verification for Dockerized applications — powered by Nebius Token Factory and NVIDIA Nemotron-3-Nano.",
 };
 
 export default function RootLayout({

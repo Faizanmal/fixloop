@@ -140,7 +140,7 @@ ${report.patch_diff || "No diff content"}
               )}
               {totalDurationMs && report.duration_ms && totalDurationMs !== report.duration_ms ? (
                 <span className="text-slate-500 text-[10px]">
-                  (Sandbox step: {formatDuration(report.duration_ms)})
+                  (File-check step: {formatDuration(report.duration_ms)})
                 </span>
               ) : null}
             </span>
@@ -156,10 +156,10 @@ ${report.patch_diff || "No diff content"}
             ) : (
               <ShieldAlert className="h-5 w-5 text-purple-400" />
             )}
-            Disposable Sandbox Verification Outcome
+            File-Check Verification Outcome
           </h3>
           <p className="text-xs text-slate-300 mt-1">
-            Verification status grounded solely in actual isolated sandbox execution. Zero fabricated results.
+            Verification status grounded in disposable filesystem checks (file-check mode; no Docker socket). Zero fabricated results.
           </p>
         </div>
 
@@ -255,7 +255,7 @@ ${report.patch_diff || "No diff content"}
               ) : (
                 <AlertTriangle className="h-4 w-4" />
               )}
-              After Patch (In Disposable Sandbox)
+              After Patch (File-Check Workspace)
             </span>
             <span
               className={`rounded px-2 py-0.5 border text-[10px] font-mono ${
@@ -269,7 +269,7 @@ ${report.patch_diff || "No diff content"}
           </div>
           <p className="text-xs text-slate-300 leading-relaxed font-mono">
             {isFixed
-              ? `Success: ${stripTrailingPeriod(report.expected_criteria)}. Container restarted cleanly in isolated sandbox.`
+              ? `Success: ${stripTrailingPeriod(report.expected_criteria)}. Checks passed in disposable filesystem workspace (file-check mode).`
               : report.failure_evidence || report.test_output || "Verification checks failed or were not attempted."}
           </p>
         </div>
@@ -280,11 +280,11 @@ ${report.patch_diff || "No diff content"}
         <div className="flex items-center justify-between text-slate-400 border-b border-slate-800/80 pb-2.5 mb-2.5">
           <span className="flex items-center gap-1.5 text-slate-200 font-semibold">
             <Terminal className="h-4 w-4 text-cyan-400" />
-            Sandbox Execution Standard Output
+            File-Check Execution Output
           </span>
           <div className="flex items-center gap-2">
             <span className="text-[11px] text-slate-500 font-mono">
-              Pure Python Sandboxed Pipeline
+              Pure Python File-Check Pipeline
             </span>
             <button
               onClick={handleCopyLog}
@@ -302,7 +302,7 @@ ${report.patch_diff || "No diff content"}
 
         <div className="space-y-1 text-slate-300 text-xs py-1">
           <div className="text-cyan-400">
-            $ fixloop-sandbox-runner --target {report.target_file || "docker-compose.yml"} --revert-on-finish
+            $ fixloop-filecheck --target {report.target_file || "docker-compose.yml"} --revert-on-finish
           </div>
           <div className="text-emerald-300 font-medium whitespace-pre-wrap leading-relaxed">
             {report.test_output}
@@ -319,14 +319,14 @@ ${report.patch_diff || "No diff content"}
       <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4 text-xs">
         <div className="flex items-center gap-2 text-slate-200 font-semibold mb-2">
           <ShieldAlert className="h-4 w-4 text-amber-400" />
-          Remaining Risks & Sandbox Limitations
+          Remaining Risks & File-Check Limitations
         </div>
         <ul className="list-disc list-inside space-y-1.5 text-slate-400 text-[11px] leading-relaxed">
           <li>
-            <strong className="text-slate-300">No Direct Host Mutation:</strong> The patch was tested strictly inside an ephemeral sandbox. Manual application is required to update host project files.
+            <strong className="text-slate-300">No Direct Host Mutation:</strong> The patch was tested in a disposable filesystem workspace (file-check mode). Manual application is required to update host project files.
           </li>
           <li>
-            <strong className="text-slate-300">Isolated Network:</strong> Ephemeral testing ran in an isolated workspace with external network calls disabled to prevent accidental egress.
+            <strong className="text-slate-300">No Docker Socket:</strong> Public demo verification does not mount or call a live Docker daemon; checks run against copied project files in a temp directory.
           </li>
           <li>
             <strong className="text-slate-300">Host Working Copy Clean:</strong> The host workspace was verified untouched and preserved in its original clean state.
@@ -337,9 +337,9 @@ ${report.patch_diff || "No diff content"}
       {/* Post-Verification Production Actions */}
       {isFixed && (
         <div className="mt-5 pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-          <div className="text-xs text-slate-400 font-mono flex items-center gap-2">
+          <div className="flex items-center gap-2 text-xs text-slate-400 font-mono">
             <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span>Sandbox verified clean (Exit 0). Ready for repository integration.</span>
+            <span>File-check verified clean (Exit 0). Ready for repository integration.</span>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">

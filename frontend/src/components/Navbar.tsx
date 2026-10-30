@@ -261,7 +261,7 @@ export function Navbar({
                     <td className="p-3 text-cyan-300 font-semibold">+14.3% minimal diffs</td>
                   </tr>
                   <tr>
-                    <td className="p-3 font-semibold">Actual Sandbox Verification Rate</td>
+                    <td className="p-3 font-semibold">Actual File-Check Verification Rate</td>
                     <td className="p-3 text-emerald-400 font-bold">57.1%</td>
                     <td className="p-3 text-rose-400">14.3%</td>
                     <td className="p-3 text-cyan-300 font-semibold">+42.8% Exit Code 0 truth</td>

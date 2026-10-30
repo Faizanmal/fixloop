@@ -40,15 +40,15 @@ export function getStatusPanelConfig(
   ) {
     const rawSummary = verificationReport?.test_output
       ? verificationReport.test_output.split("\n")[0].trim()
-      : "Isolated sandbox container returned exit code 0";
+      : "File-check verification returned exit code 0";
     const testSummary = stripTrailingPeriod(rawSummary);
 
     return {
       badgeText: "VERIFIED FIXED",
       badgeClassName: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30",
-      headline: "Root Cause Verified & Sandbox Fix Validated",
+      headline: "Root Cause Verified & File-Check Fix Validated",
       nextActionText: "Review and apply the patch",
-      detailMessage: `Sandbox verification passed: ${testSummary}. Fix validated and reverted to pristine state.`,
+      detailMessage: `File-check verification passed: ${testSummary}. Fix validated in disposable workspace; host copy reverted.`,
       isConclusive: true,
       isInsufficient: false,
       isVerified: true,
@@ -87,9 +87,9 @@ export function getStatusPanelConfig(
     return {
       badgeText: "VERIFICATION FAILED",
       badgeClassName: "bg-rose-500/10 text-rose-400 border-rose-500/30",
-      headline: "Patch Verification Failed in Sandbox",
+      headline: "Patch Verification Failed (File-Check Mode)",
       nextActionText: "Refine hypothesis or formulate alternative patch",
-      detailMessage: verificationReport?.failure_evidence || "Test suite failed in disposable sandbox. Changes automatically reverted.",
+      detailMessage: verificationReport?.failure_evidence || "Checks failed in disposable filesystem workspace. Changes automatically reverted.",
       isConclusive: false,
       isInsufficient: false,
       isVerified: false,
@@ -147,7 +147,7 @@ export function getStatusPanelConfig(
     badgeText: "DIAGNOSIS AVAILABLE",
     badgeClassName: "bg-cyan-500/10 text-cyan-400 border-cyan-500/30",
     headline: "Root-Cause Hypotheses & Confidence Calibration",
-    nextActionText: fallbackNextAction || "Review patch and verify in sandbox",
+    nextActionText: fallbackNextAction || "Review patch and verify in file-check mode",
     detailMessage: "Empirical evidence corroborates root-cause hypothesis above 90% threshold.",
     isConclusive: true,
     isInsufficient: false,

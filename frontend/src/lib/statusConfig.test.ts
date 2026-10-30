@@ -11,7 +11,7 @@ test("verified_fixed status yields verified badge and next step to review/apply 
 
   const config = getStatusPanelConfig("verified_fixed", dummyReport, 0.98);
   assert.strictEqual(config.badgeText, "VERIFIED FIXED");
-  assert.match(config.headline, /Verified.*Validated/i);
+  assert.match(config.headline, /Verified.*File-Check.*Validated/i);
   assert.strictEqual(config.nextActionText, "Review and apply the patch");
   assert.strictEqual(config.isVerified, true);
   assert.strictEqual(config.isConclusive, true);
@@ -52,7 +52,7 @@ test("verification_failed status displays sandbox failure headline and refinemen
 
   const config = getStatusPanelConfig("verification_failed", failedReport, 0.95);
   assert.strictEqual(config.badgeText, "VERIFICATION FAILED");
-  assert.strictEqual(config.headline, "Patch Verification Failed in Sandbox");
+  assert.strictEqual(config.headline, "Patch Verification Failed (File-Check Mode)");
   assert.strictEqual(
     config.nextActionText,
     "Refine hypothesis or formulate alternative patch"
@@ -60,7 +60,7 @@ test("verification_failed status displays sandbox failure headline and refinemen
   assert.strictEqual(config.isVerified, false);
 });
 
-test("diagnosis_available status with high confidence indicates sandbox verify next step", () => {
+test("diagnosis_available status with high confidence indicates file-check verify next step", () => {
   const config = getStatusPanelConfig("diagnosis_available", null, 0.95);
   assert.strictEqual(config.badgeText, "DIAGNOSIS AVAILABLE");
   assert.strictEqual(
@@ -69,7 +69,7 @@ test("diagnosis_available status with high confidence indicates sandbox verify n
   );
   assert.strictEqual(
     config.nextActionText,
-    "Review patch and verify in sandbox"
+    "Review patch and verify in file-check mode"
   );
   assert.strictEqual(config.isConclusive, true);
 });

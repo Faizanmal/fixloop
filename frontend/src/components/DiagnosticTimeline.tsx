@@ -91,8 +91,8 @@ export const DiagnosticTimeline = React.memo(function DiagnosticTimeline({
     },
     {
       id: 5,
-      name: "Sandbox Verification",
-      desc: "Tested in disposable ephemeral sandbox with host repository untouched",
+      name: "File-Check Verification",
+      desc: "Verified in disposable filesystem workspace (file-check mode); host repository untouched",
       completed: hasPatchVerified,
       active: false,
     },
