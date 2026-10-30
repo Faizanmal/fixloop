@@ -25,6 +25,7 @@ import {
   RotateCcw,
   Sparkles,
   X,
+  Shield,
   ShieldCheck,
   History,
 } from "lucide-react";
@@ -183,6 +184,25 @@ export default function Home() {
   useEffect(() => {
     let isMounted = true;
 
+    // Fast initial probe for Docker / Sandbox status (~10ms)
+    void apiClient
+      .checkHealth()
+      .then((dockerStatus) => {
+        if (!isMounted || !dockerStatus) return;
+        setReadiness((prev) => {
+          if (prev) {
+            return { ...prev, docker: dockerStatus };
+          }
+          return {
+            ready: false,
+            service: "fixloop",
+            docker: dockerStatus,
+            issues: [],
+          };
+        });
+      })
+      .catch(() => {});
+
     async function executeLoad() {
       try {
         const [readyRes, scenariosRes, recentRes] = await Promise.allSettled([
@@ -283,14 +303,37 @@ export default function Home() {
 
       // Step B: Fetch real proposed patch diff from backend
       let patch: PatchProposal | null = null;
-      if (result.status === "diagnosis_available" && result.confidence >= 0.9) {
-        patch = await apiClient.fetchPatchProposal(
-          result.investigation_id || effectiveTarget
-        );
-        if (patch) {
-          setPatchProposal(patch);
+      if (
+        result.status === "diagnosis_available" &&
+        result.confidence >= 0.9 &&
+        result.has_safe_patch !== false
+      ) {
+        try {
+          patch = await apiClient.fetchPatchProposal(
+            result.investigation_id || effectiveTarget
+          );
+          if (patch) {
+            setPatchProposal(patch);
+          }
+        } catch {
+          // Soft fallback when backend returns 400 (no safe patch available)
         }
       }
+
+      const activePatchForDiag = getPatchForDiagnosis(
+        result,
+        effectiveTarget,
+        patch,
+        null
+      );
+      const isNoSafePatchRun =
+        result.has_safe_patch === false ||
+        (result.status === "diagnosis_available" &&
+          result.confidence >= 0.9 &&
+          activePatchForDiag === null);
+      const recordedStatus = isNoSafePatchRun
+        ? "diagnosis_no_patch"
+        : result.status;
 
       // Record in recent history using server-measured authoritative duration
       const serverTimestamp = result.started_at_iso || new Date().toISOString();
@@ -301,7 +344,7 @@ export default function Home() {
       const newHistoryItem: InvestigationHistoryItem = {
         id: invId,
         scenarioName: effectiveTarget,
-        status: result.status,
+        status: recordedStatus,
         confidence: result.confidence,
         durationMs,
         diagnosisDurationMs: result.duration_ms || durationMs,
@@ -669,6 +712,11 @@ export default function Home() {
     proposal: PatchProposal | null,
     report: VerificationReport | null
   ) => {
+    // 0. If backend explicitly marked that there is no safe patch, strictly return null
+    if (diag?.has_safe_patch === false) {
+      return null;
+    }
+
     if (proposal?.diff_unified) {
       return {
         diff: proposal.diff_unified,
@@ -695,11 +743,24 @@ export default function Home() {
       scenarioId,
     ].join(" ");
 
+    const text = contextText.toLowerCase();
+
+    // 1. Unreachable external database/dependency (e.g. ECONNREFUSED 127.0.0.1:5432, postgres down)
+    // No automated safe patch exists for external service unreachable state
+    if (
+      text.includes("econnrefused") ||
+      text.includes("connection refused") ||
+      text.includes("5432") ||
+      (text.includes("postgres") && !text.includes("scenario_a"))
+    ) {
+      return null;
+    }
+
+    // 2. Missing Environment Variable (Scenario A, cache-worker REDIS_URL, etc.)
     const envInfo = extractEnvVarInfo(contextText);
     if (
       envInfo ||
-      contextText.toLowerCase().includes("database_url") ||
-      contextText.toLowerCase().includes("scenario_a")
+      text.includes("scenario_a")
     ) {
       const varName = envInfo?.varName || "DATABASE_URL";
       const defaultVal =
@@ -712,8 +773,6 @@ export default function Home() {
         procedure: "verify_env_presence",
       };
     }
-
-    const text = contextText.toLowerCase();
 
     if (
       text.includes("health") ||
@@ -744,20 +803,59 @@ export default function Home() {
       };
     }
 
-    return {
-      diff: `--- a/docker-compose.yml\n+++ b/docker-compose.yml\n@@ -8,2 +8,2 @@\n     ports:\n-      - "8000:5000"\n+      - "8000:8000"`,
-      targetFile: "docker-compose.yml",
-      explanation:
-        "Aligned container target port in docker-compose.yml from 5000 to 8000 to match application listener.",
-      procedure: "verify_port_mapping",
-    };
+    // 5. Genuine Container Port Mismatch (Scenario C: 8000:5000 vs 8000:8000)
+    // Only offer when scenario_c or an explicit port mismatch is present in diagnosis text
+    if (
+      scenarioId.includes("scenario_c") ||
+      (text.includes("port") && (text.includes("5000") || text.includes("mismatch") || text.includes("listener")))
+    ) {
+      return {
+        diff: `--- a/docker-compose.yml\n+++ b/docker-compose.yml\n@@ -8,2 +8,2 @@\n     ports:\n-      - "8000:5000"\n+      - "8000:8000"`,
+        targetFile: "docker-compose.yml",
+        explanation:
+          "Aligned container target port in docker-compose.yml from 5000 to 8000 to match application listener.",
+        procedure: "verify_port_mapping",
+      };
+    }
+
+    // 6. Memory Limit (Scenario D: OOM / out of memory)
+    if (
+      scenarioId.includes("scenario_d") ||
+      text.includes("oom") ||
+      text.includes("out of memory")
+    ) {
+      return {
+        diff: `--- a/docker-compose.yml\n+++ b/docker-compose.yml\n@@ -12,2 +12,2 @@\n     deploy:\n       resources:\n         limits:\n-          memory: 64M\n+          memory: 512M`,
+        targetFile: "docker-compose.yml",
+        explanation: "Increased container memory limit to 512M to prevent OOM termination.",
+        procedure: "verify_memory_limit",
+      };
+    }
+
+    // Default: Strictly return null when no safe patch matches diagnosed root cause class
+    return null;
   };
+
+  const activePatch = getPatchForDiagnosis(
+    diagnosis,
+    selectedScenarioId,
+    patchProposal,
+    verificationReport
+  );
 
   // Can a patch be proposed?
   const canPatch =
     diagnosis !== null &&
     diagnosis.status === "diagnosis_available" &&
-    diagnosis.confidence >= 0.9;
+    diagnosis.confidence >= 0.9 &&
+    activePatch !== null;
+
+  const isNoSafePatch =
+    diagnosis !== null &&
+    (diagnosis.has_safe_patch === false ||
+      (diagnosis.status === "diagnosis_available" &&
+        diagnosis.confidence >= 0.9 &&
+        activePatch === null));
 
   return (
     <div className="min-h-screen flex flex-col bg-[#090d16] text-slate-100">
@@ -953,6 +1051,8 @@ export default function Home() {
                       : verificationReport?.status === "verification_failed" ||
                         verificationReport?.status === "patch_rejected"
                       ? "verification_failed"
+                      : isNoSafePatch
+                      ? "diagnosis_no_patch"
                       : activeItem?.status ||
                         (diagnosis.status === "insufficient_evidence"
                           ? "insufficient_evidence"
@@ -986,15 +1086,54 @@ export default function Home() {
                 {/* Collected Empirical Evidence */}
                 <EvidenceViewer evidence={diagnosis.evidence} />
 
-                {/* Patch Blocked State (When confidence < 90% or status is insufficient_evidence) */}
-                {!canPatch && (
+                {/* 1. No Safe Patch Available State (Conclusive diagnosis, but root cause class has no safe automated code patch) */}
+                {isNoSafePatch && (
                   <div className="mt-8 rounded-xl border border-amber-500/40 bg-amber-950/20 p-5 shadow-sm backdrop-blur">
                     <div className="flex items-start gap-3">
-                      <AlertTriangle className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+                      <Shield className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <h4 className="text-sm font-bold text-white font-mono flex items-center gap-2">
+                            <span>No Safe Patch Available for this Diagnosis</span>
+                            <span className="rounded bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 text-[10px] text-amber-300 font-mono">
+                              Procedure Invariant Enforced
+                            </span>
+                          </h4>
+                          <span className="text-xs font-mono text-amber-300 font-semibold">
+                            Status: Diagnosis available, no patch
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-300 mt-2 leading-relaxed">
+                          Conclusive root-cause diagnosis formulated ({Math.round((diagnosis.confidence || 0) * 100)}% certainty), but no safe automated code patch exists for this external dependency or infrastructure state. FixLoop refuses to synthesize unrelated template patches.
+                        </p>
+                        <div className="mt-3 rounded-lg border border-slate-800 bg-slate-900/80 p-3">
+                          <div className="text-xs font-mono text-slate-400 font-semibold mb-1">
+                            Diagnosed Root Cause:
+                          </div>
+                          <div className="text-xs font-mono text-slate-200">
+                            {diagnosis.hypotheses?.[0]?.description || diagnosis.summary}
+                          </div>
+                          <div className="mt-2 text-xs font-mono text-amber-300/90 font-semibold">
+                            Recommended Next Action:
+                          </div>
+                          <div className="text-xs font-mono text-slate-300">
+                            {diagnosis.next_action || "Ensure the external database/dependency is running and reachable at the configured endpoint before restarting the service."}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. Patch Blocked State (When confidence < 90% or status is insufficient_evidence) */}
+                {!canPatch && !isNoSafePatch && (
+                  <div className="mt-8 rounded-xl border border-purple-500/40 bg-purple-950/20 p-5 shadow-sm backdrop-blur">
+                    <div className="flex items-start gap-3">
+                      <AlertTriangle className="h-5 w-5 text-purple-400 shrink-0 mt-0.5" />
                       <div>
                         <h4 className="text-sm font-bold text-white font-mono flex items-center gap-2">
                           <span>Patch Proposal Blocked</span>
-                          <span className="rounded bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 text-[10px] text-amber-300 font-mono">
+                          <span className="rounded bg-purple-500/20 border border-purple-500/40 px-2 py-0.5 text-[10px] text-purple-300 font-mono">
                             Safety Invariant Enforced
                           </span>
                         </h4>
@@ -1002,7 +1141,7 @@ export default function Home() {
                           FixLoop strictly refuses to propose uncorroborated patches. Minimum calibrated confidence threshold (&ge; 90%) was not reached ({Math.round((diagnosis.confidence || 0) * 100)}% observed).
                         </p>
                         {diagnosis.missing_information && diagnosis.missing_information.length > 0 && (
-                          <div className="mt-3 text-xs font-mono text-amber-200/90">
+                          <div className="mt-3 text-xs font-mono text-purple-200/90">
                             <span className="font-semibold text-slate-400">Missing Telemetry:</span>
                             <ul className="list-disc list-inside mt-1 text-slate-300">
                               {diagnosis.missing_information.map((m, i) => (
@@ -1016,38 +1155,30 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* Patch Review Section (Only when empirical evidence threshold is met) */}
-                {canPatch && (() => {
-                  const activePatch = getPatchForDiagnosis(
-                    diagnosis,
-                    selectedScenarioId,
-                    patchProposal,
-                    verificationReport
-                  );
-                  return (
-                    <div id="patch-review-section" className="mt-8">
-                      <PatchReviewCard
-                        patchDiff={activePatch.diff}
-                        targetFile={activePatch.targetFile}
-                        explanation={activePatch.explanation}
-                        verificationProcedure={activePatch.procedure}
-                        isAppliedToWorkingCopy={false}
-                        onApproveAndVerify={handleApproveAndVerify}
-                        onRejectPatch={() => {
-                          setVerificationReport({
-                            status: "patch_rejected",
-                            test_output: "Patch rejected by user during review. Working copy preserved untouched.",
-                            expected_criteria: "Explicit user approval",
-                            attempts: 0,
-                            reverted: true,
-                            duration_ms: 0,
-                          });
-                        }}
-                        isVerifying={isVerifying}
-                      />
-                    </div>
-                  );
-                })()}
+                {/* 3. Patch Review Section (Only when empirical evidence threshold is met and a valid safe patch exists) */}
+                {canPatch && !isNoSafePatch && activePatch && (
+                  <div id="patch-review-section" className="mt-8">
+                    <PatchReviewCard
+                      patchDiff={activePatch.diff}
+                      targetFile={activePatch.targetFile}
+                      explanation={activePatch.explanation}
+                      verificationProcedure={activePatch.procedure}
+                      isAppliedToWorkingCopy={false}
+                      onApproveAndVerify={handleApproveAndVerify}
+                      onRejectPatch={() => {
+                        setVerificationReport({
+                          status: "patch_rejected",
+                          test_output: "Patch rejected by user during review. Working copy preserved untouched.",
+                          expected_criteria: "Explicit user approval",
+                          attempts: 0,
+                          reverted: true,
+                          duration_ms: 0,
+                        });
+                      }}
+                      isVerifying={isVerifying}
+                    />
+                  </div>
+                )}
 
                 {/* Verification Report Card */}
                 {verificationReport && (() => {

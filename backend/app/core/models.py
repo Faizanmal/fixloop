@@ -137,6 +137,7 @@ class InvestigationOutcome(str, Enum):
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
     HUMAN_INTERVENTION_REQUIRED = "HUMAN_INTERVENTION_REQUIRED"
     DIAGNOSIS_AVAILABLE = "DIAGNOSIS_AVAILABLE"
+    DIAGNOSIS_NO_PATCH = "DIAGNOSIS_NO_PATCH"
 
 
 class InvestigationStatus(str, Enum):
@@ -180,6 +181,7 @@ class InvestigationState(BaseModel):
     idempotency_key: Optional[str] = None
     is_cached: bool = False
     original_duration_ms: Optional[int] = None
+    has_safe_patch: Optional[bool] = None
 
 
 # Request & Response Contracts for REST API
@@ -295,6 +297,7 @@ class DiagnoseResponse(BaseModel):
     lookup_duration_ms: Optional[int] = Field(default=None, description="Cache lookup duration in milliseconds")
     duration_ms: Optional[int] = Field(default=None, description="Authoritative server execution duration in milliseconds")
     started_at_iso: Optional[str] = Field(default=None, description="Server creation ISO timestamp")
+    has_safe_patch: Optional[bool] = Field(default=None, description="True if a safe patch procedure exists for this diagnosis")
 
 
 class DiagnoseRequest(BaseModel):

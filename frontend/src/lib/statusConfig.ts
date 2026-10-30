@@ -16,6 +16,7 @@ export interface StatusPanelConfig {
   isInsufficient: boolean;
   isVerified: boolean;
   isVerificationFailed?: boolean;
+  isNoSafePatch?: boolean;
 }
 
 /**
@@ -52,6 +53,7 @@ export function getStatusPanelConfig(
       isInsufficient: false,
       isVerified: true,
       isVerificationFailed: false,
+      isNoSafePatch: false,
     };
   }
 
@@ -70,6 +72,7 @@ export function getStatusPanelConfig(
       isInsufficient: true,
       isVerified: false,
       isVerificationFailed: false,
+      isNoSafePatch: false,
     };
   }
 
@@ -91,6 +94,7 @@ export function getStatusPanelConfig(
       isInsufficient: false,
       isVerified: false,
       isVerificationFailed: true,
+      isNoSafePatch: false,
     };
   }
 
@@ -108,10 +112,32 @@ export function getStatusPanelConfig(
       isConclusive: false,
       isInsufficient: false,
       isVerified: false,
+      isVerificationFailed: false,
+      isNoSafePatch: false,
     };
   }
 
-  // 5. Diagnosis Available
+  // 5. Diagnosis Available, No Safe Patch
+  if (
+    normStatus === "diagnosis_no_patch" ||
+    normStatus === "no_safe_patch" ||
+    normStatus.includes("no patch")
+  ) {
+    return {
+      badgeText: "DIAGNOSIS AVAILABLE, NO PATCH",
+      badgeClassName: "bg-amber-500/10 text-amber-400 border-amber-500/30",
+      headline: "Diagnosis Available (No Safe Patch Available)",
+      nextActionText: fallbackNextAction || "Ensure database/dependency is running or reachable",
+      detailMessage: "Root cause diagnosed, but no automated safe patch exists for this external dependency or infrastructure state.",
+      isConclusive: true,
+      isInsufficient: false,
+      isVerified: false,
+      isVerificationFailed: false,
+      isNoSafePatch: true,
+    };
+  }
+
+  // 6. Diagnosis Available
   return {
     badgeText: "DIAGNOSIS AVAILABLE",
     badgeClassName: "bg-cyan-500/10 text-cyan-400 border-cyan-500/30",
@@ -121,5 +147,7 @@ export function getStatusPanelConfig(
     isConclusive: true,
     isInsufficient: false,
     isVerified: false,
+    isVerificationFailed: false,
+    isNoSafePatch: false,
   };
 }

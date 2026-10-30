@@ -397,13 +397,18 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
 
         is_conclusive = cached_resp.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
         is_insufficient = cached_resp.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
+        has_safe_patch = getattr(cached_resp, "has_safe_patch", True)
         outcome = (
             InvestigationOutcome.INSUFFICIENT_EVIDENCE
             if is_insufficient
             else (
-                InvestigationOutcome.DIAGNOSIS_AVAILABLE
-                if is_conclusive
-                else InvestigationOutcome.FAILED_FIX
+                InvestigationOutcome.DIAGNOSIS_NO_PATCH
+                if (is_conclusive and has_safe_patch is False)
+                else (
+                    InvestigationOutcome.DIAGNOSIS_AVAILABLE
+                    if is_conclusive
+                    else InvestigationOutcome.FAILED_FIX
+                )
             )
         )
         inv_state = InvestigationState(
@@ -414,6 +419,7 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             outcome=outcome,
             outcome_summary=cached_resp.summary,
             confidence=cached_resp.confidence,
+            has_safe_patch=has_safe_patch,
             duration_ms=lookup_ms,
             diagnosis_duration_ms=lookup_ms,
             verification_duration_ms=None,
@@ -446,6 +452,12 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
         now_dt = utc_now()
         is_conclusive = result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
         is_insufficient = result.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
+        has_safe_patch = request.service_name in {
+            "scenario_a_missing_env", "scenario_b_healthcheck_mismatch",
+            "scenario_c_port_mismatch", "scenario_g_failed_patch_regression",
+            "scenario_a", "scenario_b", "scenario_c", "scenario_g",
+            "scenario_1_healthcheck", "scenario_2_port_mismatch", "scenario_3_missing_env",
+        }
         diag_resp = DiagnoseResponse(
             status=result.status,
             summary=result.summary,
@@ -455,6 +467,7 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             missing_information=result.missing_information,
             confidence=result.confidence,
             next_action=result.next_action,
+            has_safe_patch=has_safe_patch,
             investigation_id=inv_id,
             idempotency_key=request.idempotency_key,
             is_cached=False,
@@ -465,9 +478,13 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             InvestigationOutcome.INSUFFICIENT_EVIDENCE
             if is_insufficient
             else (
-                InvestigationOutcome.DIAGNOSIS_AVAILABLE
-                if is_conclusive
-                else InvestigationOutcome.FAILED_FIX
+                InvestigationOutcome.DIAGNOSIS_NO_PATCH
+                if (is_conclusive and not has_safe_patch)
+                else (
+                    InvestigationOutcome.DIAGNOSIS_AVAILABLE
+                    if is_conclusive
+                    else InvestigationOutcome.FAILED_FIX
+                )
             )
         )
         inv_state = InvestigationState(
@@ -478,6 +495,7 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             outcome=outcome,
             outcome_summary=result.summary,
             confidence=result.confidence,
+            has_safe_patch=has_safe_patch,
             duration_ms=elapsed_ms,
             diagnosis_duration_ms=elapsed_ms,
             verification_duration_ms=None,
@@ -536,6 +554,13 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
 
         is_conclusive = diagnosis.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
         is_insufficient = diagnosis.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
+        alignment = evaluate_custom_patch_alignment(
+            full_context=f"{request.logs or ''} {diagnosis.summary} {' '.join(h.description for h in diagnosis.hypotheses)}",
+            raw_logs=request.logs or "",
+            scenario_name=request.service_name or "custom_target",
+        )
+        has_safe_patch = alignment.get("has_safe_patch", False)
+        diagnosis.has_safe_patch = has_safe_patch
         diagnosis.investigation_id = inv_id
         diagnosis.idempotency_key = request.idempotency_key
         diagnosis.is_cached = False
@@ -545,9 +570,13 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             InvestigationOutcome.INSUFFICIENT_EVIDENCE
             if is_insufficient
             else (
-                InvestigationOutcome.DIAGNOSIS_AVAILABLE
-                if is_conclusive
-                else InvestigationOutcome.FAILED_FIX
+                InvestigationOutcome.DIAGNOSIS_NO_PATCH
+                if (is_conclusive and not has_safe_patch)
+                else (
+                    InvestigationOutcome.DIAGNOSIS_AVAILABLE
+                    if is_conclusive
+                    else InvestigationOutcome.FAILED_FIX
+                )
             )
         )
         evidence_items = []
@@ -579,6 +608,7 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             outcome=outcome,
             outcome_summary=diagnosis.summary,
             confidence=diagnosis.confidence,
+            has_safe_patch=has_safe_patch,
             duration_ms=elapsed_ms,
             diagnosis_duration_ms=elapsed_ms,
             verification_duration_ms=None,
@@ -867,6 +897,11 @@ async def propose_patch(scenario_name: str) -> PatchProposal:
         raw_logs=raw_logs,
         scenario_name=scenario_name,
     )
+    if not alignment.get("has_safe_patch") or not alignment.get("is_aligned") or not alignment.get("diff_unified"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No safe patch available for this diagnosis: candidate patch procedure does not match diagnosed root cause."
+        )
     return PatchProposal(
         id=alignment["patch_id"],
         hypothesis_id=alignment["hypothesis_id"],

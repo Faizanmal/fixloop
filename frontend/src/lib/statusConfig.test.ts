@@ -154,4 +154,19 @@ test("formatModelName normalizes all model name variants into a single canonical
   assert.strictEqual(formatModelName("NVIDIA Nemotron-3-Nano"), CANONICAL_MODEL_NAME);
 });
 
+test("diagnosis_no_patch status yields DIAGNOSIS AVAILABLE, NO PATCH badge and no-safe-patch state", () => {
+  const config = getStatusPanelConfig(
+    "diagnosis_no_patch",
+    null,
+    0.95,
+    "Ensure PostgreSQL is running and reachable on port 5432"
+  );
+  assert.strictEqual(config.badgeText, "DIAGNOSIS AVAILABLE, NO PATCH");
+  assert.strictEqual(config.headline, "Diagnosis Available (No Safe Patch Available)");
+  assert.strictEqual(config.nextActionText, "Ensure PostgreSQL is running and reachable on port 5432");
+  assert.strictEqual(config.isConclusive, true);
+  assert.strictEqual(config.isNoSafePatch, true);
+  assert.strictEqual(config.isVerified, false);
+});
+
 

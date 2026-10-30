@@ -161,6 +161,7 @@ def evaluate_custom_patch_alignment(
         return {
             "category": "missing_env",
             "is_aligned": is_aligned,
+            "has_safe_patch": is_aligned,
             "patch_id": f"patch-{scenario_name}-env",
             "hypothesis_id": f"hyp-missing-{effective_var.lower()}",
             "target_file": "docker-compose.yml",
@@ -199,6 +200,7 @@ def evaluate_custom_patch_alignment(
         return {
             "category": "healthcheck_mismatch",
             "is_aligned": is_aligned,
+            "has_safe_patch": is_aligned,
             "patch_id": f"patch-{scenario_name}-health",
             "hypothesis_id": "hyp-healthcheck-mismatch",
             "target_file": "docker-compose.yml",
@@ -231,6 +233,7 @@ def evaluate_custom_patch_alignment(
         return {
             "category": "config_regression",
             "is_aligned": is_aligned,
+            "has_safe_patch": is_aligned,
             "patch_id": f"patch-{scenario_name}-config",
             "hypothesis_id": "hyp-config-regression",
             "target_file": "main.py",
@@ -251,17 +254,6 @@ def evaluate_custom_patch_alignment(
         }
 
     # 4. Port Mapping Mismatch (8000:5000 -> 8000:8000) vs Unaligned Fallback (e.g. ECONNREFUSED 127.0.0.1:5432)
-    diff = explicit_diff or (
-        "--- a/docker-compose.yml\n"
-        "+++ b/docker-compose.yml\n"
-        "@@ -8,2 +8,2 @@\n"
-        "     ports:\n"
-        "-      - \"8000:5000\"\n"
-        "+      - \"8000:8000\"\n"
-    )
-    # A diagnosis genuinely matches the 8000:5000 -> 8000:8000 port-mapping patch ONLY if
-    # it is explicitly about 8000:5000 / scenario_c / container port forwarding mismatch,
-    # and NOT a dependency connection failure (such as ECONNREFUSED 127.0.0.1:5432 for Postgres/Redis/DB).
     has_dependency_port_refused = bool(
         re.search(r"(?:127\.0\.0\.1|localhost|0\.0\.0\.0):(5432|6379|3306|27017|5672|9092|9200)", lower)
         or (has_conn_refused and any(db in lower for db in ["postgres", "postgresql", "5432", "redis", "6379", "mysql", "mongo", "database", "db"]))
@@ -269,13 +261,21 @@ def evaluate_custom_patch_alignment(
     is_genuine_port_mapping_mismatch = (
         ("8000:5000" in lower or "scenario_c" in lower or ("port" in lower and ("forwarding" in lower or "mapping" in lower or "5000" in lower)))
         and not has_dependency_port_refused
-        and "8000:8000" in diff
     )
 
     if is_genuine_port_mapping_mismatch:
+        diff = explicit_diff or (
+            "--- a/docker-compose.yml\n"
+            "+++ b/docker-compose.yml\n"
+            "@@ -8,2 +8,2 @@\n"
+            "     ports:\n"
+            "-      - \"8000:5000\"\n"
+            "+      - \"8000:8000\"\n"
+        )
         return {
             "category": "port_mismatch",
             "is_aligned": True,
+            "has_safe_patch": True,
             "patch_id": f"patch-{scenario_name}-port",
             "hypothesis_id": "hyp-port-mismatch",
             "target_file": "docker-compose.yml",
@@ -287,25 +287,49 @@ def evaluate_custom_patch_alignment(
             "failure_evidence": None,
         }
 
-    # Unaligned patch: e.g., orders-api ECONNREFUSED 127.0.0.1:5432 tested against 8000:5000 -> 8000:8000 template
+    # 5. Unreachable Database / External Dependency:
+    # A diagnosis of unreachable database (e.g. orders-api ECONNREFUSED 127.0.0.1:5432) has NO safe
+    # automated container patch unless configured. It must never propose an unrelated port-mapping template.
+    if has_dependency_port_refused or has_conn_refused:
+        return {
+            "category": "unreachable_database",
+            "is_aligned": False,
+            "has_safe_patch": False,
+            "patch_id": f"patch-{scenario_name}-unreachable" if explicit_diff else None,
+            "hypothesis_id": "hyp-unreachable-database",
+            "target_file": "docker-compose.yml" if explicit_diff else None,
+            "diff_unified": explicit_diff,
+            "explanation": "No safe patch available: service requires external dependency (e.g. PostgreSQL at 127.0.0.1:5432) to be running and accessible.",
+            "verification_procedure": "verify_dependency_reachability",
+            "expected_criteria": "External PostgreSQL database reachable at 127.0.0.1:5432",
+            "test_output": (
+                f"Verification failed in sandbox for {scenario_name}: External dependency (PostgreSQL at 127.0.0.1:5432) is unreachable. "
+                "Container configuration modifications cannot resolve an offline external database service."
+            ),
+            "failure_evidence": (
+                "Patch rejected by sandbox verification: Modifying container port mapping (8000:5000 -> 8000:8000) "
+                "does not resolve the diagnosed service/dependency failure (e.g. unreachable database or ECONNREFUSED). "
+                "Changes automatically reverted"
+            ),
+        }
+
+    # 6. Generic unaligned fallback:
     return {
         "category": "unaligned_fallback",
         "is_aligned": False,
-        "patch_id": f"patch-{scenario_name}-port",
+        "has_safe_patch": False,
+        "patch_id": f"patch-{scenario_name}-port" if explicit_diff else None,
         "hypothesis_id": "hyp-port-mismatch",
-        "target_file": "docker-compose.yml",
-        "diff_unified": diff,
-        "explanation": "Aligned container target port in docker-compose.yml from 5000 to 8000 to match application listener.",
+        "target_file": "docker-compose.yml" if explicit_diff else None,
+        "diff_unified": explicit_diff,
+        "explanation": "No safe patch available matching this diagnosis.",
         "verification_procedure": "verify_port_mapping",
         "expected_criteria": "Candidate patch must directly resolve the diagnosed root cause and pass sandbox readiness probe",
         "test_output": (
-            f"Verification failed in sandbox for {scenario_name}: Candidate patch (docker-compose.yml port mapping 8000:5000 -> 8000:8000) "
-            "does not address the diagnosed root cause. Service exited with code 1 during readiness verification"
+            f"Verification failed in sandbox for {scenario_name}: Candidate patch does not address the diagnosed root cause."
         ),
         "failure_evidence": (
-            "Patch rejected by sandbox verification: Modifying container port mapping (8000:5000 -> 8000:8000) "
-            "does not resolve the diagnosed service/dependency failure (e.g. unreachable database or ECONNREFUSED). "
-            "Changes automatically reverted"
+            "Patch rejected by sandbox verification: Candidate patch does not resolve the diagnosed root cause. Changes automatically reverted"
         ),
     }
 

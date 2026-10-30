@@ -27,10 +27,13 @@ export function Navbar({
   isInvestigating,
 }: NavbarProps) {
   const [showBenchmark, setShowBenchmark] = useState<boolean>(false);
+  const isInitialLoad = readiness === null;
   const isReady = readiness?.ready ?? false;
   const nebiusInfo = readiness?.nebius;
+  const hasNebiusResult = nebiusInfo !== undefined && nebiusInfo !== null;
   const dockerInfo = readiness?.docker;
-  const isDockerUp = dockerInfo?.available ?? false;
+  const hasDockerResult = dockerInfo !== undefined && dockerInfo !== null;
+  const isDockerUp = dockerInfo?.available === true;
 
   const modelDisplay = formatModelName(nebiusInfo?.model);
 
@@ -65,12 +68,12 @@ export function Navbar({
           {/* Target Model Badge */}
           <div
             className="hidden lg:flex items-center gap-2 rounded-lg bg-slate-900/90 px-2.5 py-1.5 text-xs text-slate-300 ring-1 ring-slate-800"
-            title={`Nebius Model: ${modelDisplay}`}
+            title={hasNebiusResult ? `Nebius Model: ${modelDisplay}` : "Detecting Nebius Model…"}
           >
             <Cpu className="h-3.5 w-3.5 text-indigo-400" />
             <span className="font-mono text-[11px] text-slate-400">Model:</span>
             <span className="font-mono text-[11px] text-indigo-300 font-medium truncate max-w-[240px]">
-              {modelDisplay}
+              {hasNebiusResult ? modelDisplay : "Checking…"}
             </span>
           </div>
 
@@ -78,29 +81,44 @@ export function Navbar({
           <div
             className="hidden md:flex items-center gap-1.5 rounded-lg bg-slate-900/90 px-2.5 py-1.5 text-xs text-slate-300 ring-1 ring-slate-800"
             title={
-              isDockerUp
+              !hasDockerResult
+                ? "Checking sandbox environment…"
+                : isDockerUp
                 ? `Docker Live: ${dockerInfo?.server_version || "Active"}`
                 : "Sandbox: file-check mode (Disposable filesystem verification active)"
             }
           >
             <Server className="h-3.5 w-3.5 text-cyan-400" />
             <span className="font-mono text-[11px]">
-              {isDockerUp ? "Docker Live" : "Sandbox: file-check mode"}
+              {!hasDockerResult
+                ? "Checking sandbox…"
+                : isDockerUp
+                ? "Docker Live"
+                : "Sandbox: file-check mode"}
             </span>
           </div>
 
           {/* Backend Readiness Indicator */}
           <div
             className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-mono font-medium ring-1 ${
-              isReady || readiness === null
+              isInitialLoad
+                ? "bg-slate-900/90 text-slate-300 ring-slate-800"
+                : isReady
                 ? "bg-emerald-950/40 text-emerald-300 ring-emerald-800/60"
                 : "bg-amber-950/40 text-amber-300 ring-amber-800/60"
             }`}
             title={
-              readiness?.issues?.join("; ") || "Backend & Nebius Token Factory Ready"
+              isInitialLoad
+                ? "Verifying backend and sandbox readiness..."
+                : readiness?.issues?.join("; ") || "Backend & Nebius Token Factory Ready"
             }
           >
-            {isReady || readiness === null ? (
+            {isInitialLoad ? (
+              <>
+                <span className="h-2 w-2 rounded-full bg-cyan-400 shadow-sm shadow-cyan-400 animate-pulse" />
+                <span className="text-[11px]">Checking…</span>
+              </>
+            ) : isReady ? (
               <>
                 <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400 animate-pulse" />
                 <span className="text-[11px]">Engine Ready</span>

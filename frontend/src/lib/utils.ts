@@ -57,6 +57,9 @@ export function getStatusColor(status: string): {
         dot: "bg-rose-500",
       };
     case "patch_rejected":
+    case "diagnosis_no_patch":
+    case "diagnosis available, no patch":
+    case "diagnosis_available, no patch":
       return {
         bg: "bg-amber-950/40",
         text: "text-amber-400",

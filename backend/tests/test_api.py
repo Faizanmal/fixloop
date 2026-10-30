@@ -441,6 +441,49 @@ async def test_custom_log_redis_keyerror_patch_proposal():
 
 
 @pytest.mark.asyncio
+async def test_cache_worker_redis_keyerror_patch_and_verification():
+    """Verify that cache-worker with REDIS_URL KeyError gets REDIS_URL=redis://localhost:6379/0 patch and passes verification."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # Step 1: Diagnose cache-worker with REDIS_URL KeyError
+        diag_resp = await client.post(
+            "/api/v1/diagnose",
+            json={
+                "service_name": "cache-worker",
+                "logs": "Traceback (most recent call last):\n  File 'worker.py', line 15, in <module>\n    redis_client = redis.from_url(os.environ['REDIS_URL'])\nKeyError: 'REDIS_URL'",
+            }
+        )
+        assert diag_resp.status_code == 200
+        diag_data = diag_resp.json()
+        assert diag_data["status"] == "diagnosis_available"
+        assert diag_data["confidence"] >= 0.90
+        assert diag_data.get("has_safe_patch") is True
+        inv_id = diag_data["investigation_id"]
+        assert inv_id is not None
+
+        # Step 2: Propose patch - must specifically contain REDIS_URL=redis://localhost:6379/0
+        patch_resp = await client.post(f"/api/v1/patch?scenario_name={inv_id}")
+        assert patch_resp.status_code == 200
+        patch_data = patch_resp.json()
+        assert "REDIS_URL=redis://localhost:6379/0" in patch_data["diff_unified"]
+        assert "docker-compose.yml" in patch_data["target_file"]
+
+        # Step 3: Run sandbox verification - must pass verified_fixed
+        verify_resp = await client.post(
+            "/api/v1/verify",
+            json={
+                "scenario_name": "cache-worker",
+                "investigation_id": inv_id,
+                "user_approved": True,
+            }
+        )
+        assert verify_resp.status_code == 200
+        verify_data = verify_resp.json()
+        assert verify_data["status"] == "verified_fixed"
+        assert "REDIS_URL=redis://localhost:6379/0" in verify_data["patch_diff"]
+        assert verify_data["reverted"] is True
+
+
+@pytest.mark.asyncio
 async def test_orders_api_econnrefused_postgres_rejects_wrong_port_mapping_patch():
     """Verify orders-api ECONNREFUSED 127.0.0.1:5432 gets 96% Postgres diagnosis, and sandbox verification REJECTS the 8000:5000 -> 8000:8000 port-mapping patch."""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -457,6 +500,18 @@ async def test_orders_api_econnrefused_postgres_rejects_wrong_port_mapping_patch
         assert diag_data["confidence"] >= 0.90
         inv_id = diag_data["investigation_id"]
         assert inv_id is not None
+        assert diag_data.get("has_safe_patch") is False
+
+        # Verify that patch proposal rejects unaligned patch and returns 400 (never offering 8000:5000 -> 8000:8000)
+        patch_resp = await client.post(f"/api/v1/patch?scenario_name={inv_id}")
+        assert patch_resp.status_code == 400
+        patch_err = patch_resp.json()
+        assert "no safe patch available" in str(patch_err).lower()
+
+        # Check /investigations record initially reflects DIAGNOSIS_NO_PATCH before verification
+        initial_inv = await client.get(f"/investigations/{inv_id}")
+        assert initial_inv.status_code == 200
+        assert initial_inv.json()["outcome"] == "DIAGNOSIS_NO_PATCH"
 
         # Verify that running sandbox verification on the fallback port-mapping patch FAILS verification
         verify_resp = await client.post(

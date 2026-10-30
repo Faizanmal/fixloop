@@ -269,7 +269,8 @@ class MockLLMProvider:
                 ],
                 missing_information=[],
                 confidence=0.96,
-                next_action=f"Define {var_name} in docker-compose.yml or container environment block"
+                next_action=f"Define {var_name} in docker-compose.yml or container environment block",
+                has_safe_patch=True,
             )
 
         # 2. Healthcheck Probe Mismatch Check
@@ -311,7 +312,8 @@ class MockLLMProvider:
                 ],
                 missing_information=[],
                 confidence=0.94,
-                next_action="Align healthcheck probe test endpoint in docker-compose.yml with application route"
+                next_action="Align healthcheck probe test endpoint in docker-compose.yml with application route",
+                has_safe_patch=True,
             )
 
         # 2.5. Database / Local Service ECONNREFUSED Check (e.g., orders-api ECONNREFUSED 127.0.0.1:5432)
@@ -356,6 +358,7 @@ class MockLLMProvider:
                 missing_information=[],
                 confidence=0.96,
                 next_action=f"Ensure {db_label} container is running and configure host/network connectivity instead of loopback 127.0.0.1",
+                has_safe_patch=False,
             )
 
         # 3. External Outage / Upstream Timeout Check
@@ -383,7 +386,8 @@ class MockLLMProvider:
                 recommended_tests=[],
                 missing_information=["Status of external cloud provider service", "Upstream network route accessibility"],
                 confidence=0.50,
-                next_action="Check upstream provider status page and verify network routing"
+                next_action="Check upstream provider status page and verify network routing",
+                has_safe_patch=False,
             )
 
         # 4. Preset Scenario B Explicit Request (without custom logs override)
@@ -413,6 +417,7 @@ class MockLLMProvider:
                 "Target container environment and configuration files"
             ],
             confidence=0.15,
-            next_action="Provide container crash traceback, inspect json, or compose configuration."
+            next_action="Provide container crash traceback, inspect json, or compose configuration.",
+            has_safe_patch=False,
         )
 

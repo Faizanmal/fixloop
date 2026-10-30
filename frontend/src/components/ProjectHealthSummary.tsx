@@ -26,11 +26,12 @@ export function ProjectHealthSummary({
 }: ProjectHealthSummaryProps) {
   const isInitialLoad = readiness === null;
   const dockerInfo = readiness?.docker;
-  const isDockerUp = dockerInfo?.available ?? true;
+  const hasDockerResult = dockerInfo !== undefined && dockerInfo !== null;
+  const isDockerUp = dockerInfo?.available === true;
 
   const nebiusInfo = readiness?.nebius;
-  // In production mock mode is disabled; avoid defaulting to mock mode
-  const isNebiusConfigured = nebiusInfo?.api_key_configured ?? true;
+  const hasNebiusResult = nebiusInfo !== undefined && nebiusInfo !== null;
+  const isNebiusConfigured = nebiusInfo?.api_key_configured ?? false;
   const isMockMode = nebiusInfo?.mock_mode ?? false;
 
   return (
@@ -43,20 +44,39 @@ export function ProjectHealthSummary({
           </span>
           <Server className="h-4 w-4 text-cyan-400" />
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-lg font-bold text-white font-mono">
-            {isDockerUp ? "Docker Daemon" : "Sandbox: file-check"}
-          </span>
-          <span
-            className="h-2 w-2 rounded-full bg-emerald-400"
-            title={isDockerUp ? "Docker daemon active" : "Sandbox file-check mode active"}
-          />
-        </div>
-        <p className="mt-1 text-xs text-slate-400 leading-relaxed">
-          {isDockerUp
-            ? `Docker Engine ${dockerInfo?.server_version || "Active"}`
-            : "Sandbox: file-check mode (Zero socket exposure)"}
-        </p>
+        {!hasDockerResult ? (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-lg font-bold text-white font-mono">
+                Checking sandbox…
+              </span>
+              <span
+                className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse"
+                title="Checking sandbox environment..."
+              />
+            </div>
+            <p className="mt-1 text-xs text-slate-400 leading-relaxed">
+              Detecting container runtime / isolation mode…
+            </p>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-lg font-bold text-white font-mono">
+                {isDockerUp ? "Docker Daemon" : "Sandbox: file-check"}
+              </span>
+              <span
+                className="h-2 w-2 rounded-full bg-emerald-400"
+                title={isDockerUp ? "Docker daemon active" : "Sandbox file-check mode active"}
+              />
+            </div>
+            <p className="mt-1 text-xs text-slate-400 leading-relaxed">
+              {isDockerUp
+                ? `Docker Engine ${dockerInfo?.server_version || "Active"}`
+                : "Sandbox: file-check mode (Zero socket exposure)"}
+            </p>
+          </>
+        )}
       </div>
 
       {/* 2. Nebius Token Factory & NVIDIA Model */}
@@ -67,34 +87,48 @@ export function ProjectHealthSummary({
           </span>
           <Cpu className="h-4 w-4 text-indigo-400" />
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-lg font-bold text-white font-mono truncate">
-            {isInitialLoad
-              ? "Nemotron Live"
-              : isNebiusConfigured
-              ? "Nemotron Live"
-              : isMockMode
-              ? "Mock Engine"
-              : "Nemotron Live"}
-          </span>
-          {isInitialLoad ? (
-            <span
-              className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"
-              title="Connecting to Nemotron engine"
-            />
-          ) : isNebiusConfigured ? (
-            <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-          ) : isMockMode ? (
-            <span className="rounded bg-indigo-950 px-1.5 py-0.5 text-[9px] font-mono text-indigo-300 border border-indigo-800">
-              Deterministic
-            </span>
-          ) : (
-            <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-          )}
-        </div>
-        <p className="mt-1 text-xs text-slate-400 leading-relaxed truncate" title={formatModelName(nebiusInfo?.model)}>
-          {formatModelName(nebiusInfo?.model)}
-        </p>
+        {!hasNebiusResult ? (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-lg font-bold text-white font-mono truncate">
+                Checking engine…
+              </span>
+              <span
+                className="h-2 w-2 rounded-full bg-indigo-400 animate-pulse"
+                title="Connecting to Nebius Token Factory..."
+              />
+            </div>
+            <p className="mt-1 text-xs text-slate-400 leading-relaxed truncate">
+              Connecting to Nebius Token Factory…
+            </p>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-lg font-bold text-white font-mono truncate">
+                {isMockMode
+                  ? "Mock Engine"
+                  : isNebiusConfigured
+                  ? "Nemotron Live"
+                  : "Unconfigured"}
+              </span>
+              {isMockMode ? (
+                <span className="rounded bg-indigo-950 px-1.5 py-0.5 text-[9px] font-mono text-indigo-300 border border-indigo-800">
+                  Deterministic
+                </span>
+              ) : isNebiusConfigured ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+              ) : (
+                <span className="rounded bg-amber-950 px-1.5 py-0.5 text-[9px] font-mono text-amber-300 border border-amber-800">
+                  Offline
+                </span>
+              )}
+            </div>
+            <p className="mt-1 text-xs text-slate-400 leading-relaxed truncate" title={formatModelName(nebiusInfo?.model)}>
+              {formatModelName(nebiusInfo?.model)}
+            </p>
+          </>
+        )}
       </div>
 
       {/* 3. Security Boundaries & Guardrails */}
@@ -137,13 +171,7 @@ export function ProjectHealthSummary({
         </div>
         <p className="mt-1 text-xs text-slate-400 leading-relaxed truncate">
           {activeScenario
-            ? `Difficulty: ${activeScenario.difficulty} • ${
-                isInitialLoad && totalDiagnosesCount === 0
-                  ? "Synchronizing runs..."
-                  : `${totalDiagnosesCount} run(s) logged`
-              }`
-            : isInitialLoad && totalDiagnosesCount === 0
-            ? "Synchronizing runs..."
+            ? `Difficulty: ${activeScenario.difficulty} • ${totalDiagnosesCount} run(s) logged`
             : `Custom Input Target • ${totalDiagnosesCount} run(s) logged`}
         </p>
       </div>

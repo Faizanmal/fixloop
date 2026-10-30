@@ -106,6 +106,7 @@ export interface DiagnoseResponse {
   next_action: string;
   audit_log?: AuditLog;
   investigation_id?: string;
+  has_safe_patch?: boolean | null;
   is_cached?: boolean;
   original_duration_ms?: number | null;
   lookup_duration_ms?: number | null;
@@ -154,8 +155,10 @@ export interface SystemReadiness {
   };
   docker?: {
     available: boolean;
+    mode?: string;
     server_version?: string;
     reason?: string;
+    display?: string;
   };
   issues: string[];
 }
@@ -253,6 +256,25 @@ class FixLoopApiClient {
       return this.explicitBaseUrl;
     }
     return getApiBaseUrl();
+  }
+
+  async checkHealth(): Promise<{ available: boolean; mode?: string; server_version?: string; reason?: string; display?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/health`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.docker) {
+          return json.docker;
+        }
+      }
+    } catch {
+      // Backend check pending or offline
+    }
+    return { available: false, mode: "file_check", reason: "Sandbox: file-check mode", display: "Sandbox: file-check mode" };
   }
 
   async checkReadiness(): Promise<SystemReadiness> {
@@ -546,6 +568,12 @@ class FixLoopApiClient {
               scenarioName.includes("scenario_d")
             ) {
               status = "insufficient_evidence";
+            } else if (
+              outcome === "DIAGNOSIS_NO_PATCH" ||
+              rawStatus === "diagnosis_no_patch" ||
+              item.has_safe_patch === false
+            ) {
+              status = "diagnosis_no_patch";
             } else if (
               outcome === "DIAGNOSIS_AVAILABLE" ||
               rawStatus === "diagnosis_available" ||

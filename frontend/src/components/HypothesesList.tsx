@@ -55,7 +55,7 @@ export function HypothesesList({
       : verificationReport?.status === "verification_failed" ||
         verificationReport?.status === "patch_rejected"
       ? "verification_failed"
-      : runStatus || diagnosis.status;
+      : runStatus || (diagnosis.has_safe_patch === false ? "diagnosis_no_patch" : diagnosis.status);
 
   const panelConfig = getStatusPanelConfig(
     effectiveStatus,
@@ -376,6 +376,13 @@ export function HypothesesList({
                     Sandbox verification rejected patch: candidate fix does not resolve the diagnosed failure.
                   </span>
                 </>
+              ) : panelConfig.isNoSafePatch ? (
+                <>
+                  <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+                  <span className="text-amber-300 font-semibold">
+                    Conclusive diagnosis formulated. No automated safe patch available for this root cause. Follow recommended next action.
+                  </span>
+                </>
               ) : panelConfig.isConclusive ? (
                 <>
                   <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
@@ -397,6 +404,11 @@ export function HypothesesList({
                 <span>Review & Apply Patch</span>
                 <ArrowRight className="h-4 w-4" />
               </button>
+            ) : panelConfig.isNoSafePatch ? (
+              <div className="inline-flex items-center gap-1.5 rounded-lg border border-amber-800/60 bg-amber-950/40 px-3 py-1.5 text-xs font-medium text-amber-300 shrink-0">
+                <Shield className="h-3.5 w-3.5" />
+                <span>No Safe Patch Available</span>
+              </div>
             ) : canPatch ? (
               <button
                 onClick={onProceedToPatch}
