@@ -388,6 +388,13 @@ export function HypothesesList({
                   <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
                   <span>Conclusive evidence threshold (&gt;= 90%) met. Ready for minimal patch proposal.</span>
                 </>
+              ) : panelConfig.isInsufficient ? (
+                <>
+                  <AlertTriangle className="h-4 w-4 text-purple-400 shrink-0" />
+                  <span className="text-purple-300 font-semibold">
+                    Insufficient empirical evidence ({confidencePct}%). Automated patch generation strictly prevented.
+                  </span>
+                </>
               ) : (
                 <>
                   <AlertTriangle className="h-4 w-4 text-purple-400 shrink-0" />
@@ -417,6 +424,11 @@ export function HypothesesList({
                 <span>Review Patch & Verify in Sandbox</span>
                 <ArrowRight className="h-4 w-4" />
               </button>
+            ) : panelConfig.isInsufficient ? (
+              <div className="inline-flex items-center gap-1.5 rounded-lg border border-purple-800/60 bg-purple-950/40 px-3 py-1.5 text-xs font-medium text-purple-300 shrink-0">
+                <Shield className="h-3.5 w-3.5" />
+                <span>Patch Blocked (Insufficient Evidence)</span>
+              </div>
             ) : (
               <div className="inline-flex items-center gap-1.5 rounded-lg border border-purple-800/60 bg-purple-950/40 px-3 py-1.5 text-xs font-medium text-purple-300 shrink-0">
                 <Shield className="h-3.5 w-3.5" />

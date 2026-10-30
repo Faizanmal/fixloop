@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { getStatusColor, formatDuration } from "@/lib/utils";
-import { History, ArrowUpRight, ArrowUpDown, Eye } from "lucide-react";
+import { History, ArrowUpRight, ArrowUpDown, Eye, Trash2 } from "lucide-react";
 import { InvestigationHistoryItem } from "@/lib/api";
 
 interface RecentInvestigationsProps {
@@ -10,6 +10,13 @@ interface RecentInvestigationsProps {
   onSelectHistoryItem: (item: InvestigationHistoryItem) => void;
   activeInspectId?: string | null;
   isLoadingInspect?: boolean;
+  onClearHistory?: () => void;
+}
+
+function parseSafeEpoch(isoOrTimeString?: string | null): number {
+  if (!isoOrTimeString) return 0;
+  const t = new Date(isoOrTimeString).getTime();
+  return isNaN(t) ? 0 : t;
 }
 
 export const RecentInvestigations = React.memo(function RecentInvestigations({
@@ -17,6 +24,7 @@ export const RecentInvestigations = React.memo(function RecentInvestigations({
   onSelectHistoryItem,
   activeInspectId,
   isLoadingInspect,
+  onClearHistory,
 }: RecentInvestigationsProps) {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
@@ -37,9 +45,9 @@ export const RecentInvestigations = React.memo(function RecentInvestigations({
   // Sort history: "desc" puts newer runs first (N→1), "asc" puts older runs first (1→N)
   const sortedHistory = [...history].sort((a, b) => {
     // Primary: sort by startedAtIso epoch timestamp
-    const timeA = a.startedAtIso ? new Date(a.startedAtIso).getTime() : 0;
-    const timeB = b.startedAtIso ? new Date(b.startedAtIso).getTime() : 0;
-    if (timeA !== 0 && timeB !== 0 && timeA !== timeB) {
+    const timeA = parseSafeEpoch(a.startedAtIso);
+    const timeB = parseSafeEpoch(b.startedAtIso);
+    if (timeA > 0 && timeB > 0 && timeA !== timeB) {
       return sortOrder === "desc" ? timeB - timeA : timeA - timeB;
     }
 
@@ -79,6 +87,16 @@ export const RecentInvestigations = React.memo(function RecentInvestigations({
             <ArrowUpDown className="h-3 w-3 text-cyan-400" />
             <span>Order: {sortOrder === "desc" ? "Newest First (N→1)" : "Oldest First (1→N)"}</span>
           </button>
+          {onClearHistory && (
+            <button
+              onClick={onClearHistory}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-2 py-1 text-[11px] font-mono text-slate-400 hover:text-rose-300 hover:border-rose-800/80 transition-colors cursor-pointer"
+              title="Clear local audit history"
+            >
+              <Trash2 className="h-3 w-3" />
+              <span>Clear History</span>
+            </button>
+          )}
           <span className="text-xs text-slate-400 font-mono">
             {sortedHistory.length} logged run(s)
           </span>

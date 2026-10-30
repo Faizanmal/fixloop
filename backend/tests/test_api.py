@@ -537,6 +537,26 @@ async def test_orders_api_econnrefused_postgres_rejects_wrong_port_mapping_patch
 
 
 @pytest.mark.asyncio
+async def test_scenario_d_insufficient_evidence_status_consistency():
+    """Verify Scenario D outputs insufficient_evidence status and outcome consistently, without safe patch offering."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/v1/diagnose",
+            json={"service_name": "scenario_d_insufficient_evidence"}
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "insufficient_evidence"
+        assert data.get("has_safe_patch") is None or data.get("has_safe_patch") is not False
+        inv_id = data["investigation_id"]
+
+        inv_resp = await client.get(f"/investigations/{inv_id}")
+        assert inv_resp.status_code == 200
+        inv_data = inv_resp.json()
+        assert inv_data["outcome"] == "INSUFFICIENT_EVIDENCE"
+
+
+@pytest.mark.asyncio
 async def test_cached_scenario_a_preserves_exact_first_run_compute_duration(tmp_path):
     """Verify cached Scenario A reports the exact original_duration_ms from the first run, never overwriting with 12010ms."""
     from backend.app.api.routes import (

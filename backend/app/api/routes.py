@@ -11,6 +11,7 @@ import sys
 import time
 import shutil
 import subprocess
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
@@ -70,6 +71,19 @@ def _is_test_session() -> bool:
     return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
 
 
+def _generate_next_inv_id() -> str:
+    """Generate monotonically increasing run IDs like inv-0001, inv-0002 without colliding across server restarts."""
+    max_id = 0
+    for key in INVESTIGATIONS_DB.keys():
+        match = re.search(r"(\d+)", key)
+        if match:
+            try:
+                max_id = max(max_id, int(match.group(1)))
+            except ValueError:
+                pass
+    return f"inv-{max_id + 1:04d}"
+
+
 def _save_persisted_state(state_file: Optional[Path] = None) -> None:
     """Persists investigation history, diagnoses, and cache to disk so runs survive reloads."""
     target_path = state_file or _STATE_FILE_PATH
@@ -92,6 +106,7 @@ def _save_persisted_state(state_file: Optional[Path] = None) -> None:
                 if isinstance(entry, dict) and "response" in entry
             },
         }
+        target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     except Exception:
         pass
@@ -101,7 +116,11 @@ def _load_persisted_state(state_file: Optional[Path] = None) -> None:
     """Restores persisted investigation runs and cache from disk."""
     target_path = state_file or _STATE_FILE_PATH
     if not target_path.exists():
-        return
+        cwd_path = Path.cwd() / ".fixloop_state.json"
+        if cwd_path.exists():
+            target_path = cwd_path
+        else:
+            return
     try:
         raw = json.loads(target_path.read_text(encoding="utf-8"))
         for k, v in (raw.get("diagnoses") or {}).items():
@@ -384,7 +403,7 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
     if cache_key in DIAGNOSTIC_CACHE:
         cached_entry = DIAGNOSTIC_CACHE[cache_key]
         lookup_ms = max(5, int((time.perf_counter() - start_time) * 1000))
-        inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
+        inv_id = _generate_next_inv_id()
         now_dt = utc_now()
         cached_resp = cached_entry["response"].model_copy()
         cached_resp.investigation_id = inv_id
@@ -397,7 +416,7 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
 
         is_conclusive = cached_resp.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
         is_insufficient = cached_resp.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
-        has_safe_patch = getattr(cached_resp, "has_safe_patch", True)
+        has_safe_patch = getattr(cached_resp, "has_safe_patch", True) if is_conclusive else None
         outcome = (
             InvestigationOutcome.INSUFFICIENT_EVIDENCE
             if is_insufficient
@@ -448,16 +467,18 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
             inspect_override=request.docker_inspect,
         )
         elapsed_ms = max(10, int((time.perf_counter() - start_time) * 1000))
-        inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
+        inv_id = _generate_next_inv_id()
         now_dt = utc_now()
         is_conclusive = result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
         is_insufficient = result.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
-        has_safe_patch = request.service_name in {
-            "scenario_a_missing_env", "scenario_b_healthcheck_mismatch",
-            "scenario_c_port_mismatch", "scenario_g_failed_patch_regression",
-            "scenario_a", "scenario_b", "scenario_c", "scenario_g",
-            "scenario_1_healthcheck", "scenario_2_port_mismatch", "scenario_3_missing_env",
-        }
+        has_safe_patch = None
+        if is_conclusive:
+            has_safe_patch = request.service_name in {
+                "scenario_a_missing_env", "scenario_b_healthcheck_mismatch",
+                "scenario_c_port_mismatch", "scenario_g_failed_patch_regression",
+                "scenario_a", "scenario_b", "scenario_c", "scenario_g",
+                "scenario_1_healthcheck", "scenario_2_port_mismatch", "scenario_3_missing_env",
+            }
         diag_resp = DiagnoseResponse(
             status=result.status,
             summary=result.summary,
@@ -535,7 +556,7 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
     try:
         diagnosis = await client.diagnose(request)
         elapsed_ms = max(10, int((time.perf_counter() - start_time) * 1000))
-        inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
+        inv_id = _generate_next_inv_id()
         now_dt = utc_now()
 
         # Consistent confidence calibration across preset and custom paths
@@ -554,12 +575,14 @@ async def diagnose(request: DiagnoseRequest) -> DiagnoseResponse:
 
         is_conclusive = diagnosis.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
         is_insufficient = diagnosis.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
-        alignment = evaluate_custom_patch_alignment(
-            full_context=f"{request.logs or ''} {diagnosis.summary} {' '.join(h.description for h in diagnosis.hypotheses)}",
-            raw_logs=request.logs or "",
-            scenario_name=request.service_name or "custom_target",
-        )
-        has_safe_patch = alignment.get("has_safe_patch", False)
+        has_safe_patch = None
+        if is_conclusive:
+            alignment = evaluate_custom_patch_alignment(
+                full_context=f"{request.logs or ''} {diagnosis.summary} {' '.join(h.description for h in diagnosis.hypotheses)}",
+                raw_logs=request.logs or "",
+                scenario_name=request.service_name or "custom_target",
+            )
+            has_safe_patch = alignment.get("has_safe_patch", False)
         diagnosis.has_safe_patch = has_safe_patch
         diagnosis.investigation_id = inv_id
         diagnosis.idempotency_key = request.idempotency_key
@@ -1008,7 +1031,7 @@ async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
     if cache_key in DIAGNOSTIC_CACHE:
         cached_entry = DIAGNOSTIC_CACHE[cache_key]
         lookup_ms = max(5, int((time.perf_counter() - start_time) * 1000))
-        inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
+        inv_id = _generate_next_inv_id()
         now_dt = utc_now()
         cached_resp = cached_entry["response"].model_copy()
         cached_resp.investigation_id = inv_id
@@ -1061,7 +1084,7 @@ async def start_investigation(request: Dict[str, Any]) -> InvestigationState:
     result = await engine.run_investigation(project_root=candidate_dir)
     elapsed_ms = max(10, int((time.perf_counter() - start_time) * 1000))
 
-    inv_id = f"inv-{len(INVESTIGATIONS_DB) + 1:04d}"
+    inv_id = _generate_next_inv_id()
     now_dt = utc_now()
     is_conclusive = result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
     is_insufficient = result.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE

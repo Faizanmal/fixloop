@@ -387,7 +387,7 @@ class MockLLMProvider:
                 missing_information=["Status of external cloud provider service", "Upstream network route accessibility"],
                 confidence=0.50,
                 next_action="Check upstream provider status page and verify network routing",
-                has_safe_patch=False,
+                has_safe_patch=None,
             )
 
         # 4. Preset Scenario B Explicit Request (without custom logs override)
@@ -418,6 +418,6 @@ class MockLLMProvider:
             ],
             confidence=0.15,
             next_action="Provide container crash traceback, inspect json, or compose configuration.",
-            has_safe_patch=False,
+            has_safe_patch=None,
         )
 

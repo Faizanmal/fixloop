@@ -571,7 +571,10 @@ class FixLoopApiClient {
             } else if (
               outcome === "DIAGNOSIS_NO_PATCH" ||
               rawStatus === "diagnosis_no_patch" ||
-              item.has_safe_patch === false
+              (item.has_safe_patch === false &&
+                outcome !== "INSUFFICIENT_EVIDENCE" &&
+                rawStatus !== "insufficient_evidence" &&
+                !scenarioName.includes("scenario_d"))
             ) {
               status = "diagnosis_no_patch";
             } else if (
@@ -612,8 +615,10 @@ class FixLoopApiClient {
               ? new Date(startedAtRaw).toLocaleTimeString()
               : "";
 
+            const normalizedId = (item.id as string)?.toLowerCase() || `inv-${String(idx + 1).padStart(4, "0")}`;
+
             return {
-              id: (item.id as string) || `INV-${idx + 1}`,
+              id: normalizedId,
               scenarioName,
               status,
               confidence,

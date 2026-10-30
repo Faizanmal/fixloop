@@ -40,12 +40,13 @@ function mergeHistoryLists(
   const map = new Map<string, InvestigationHistoryItem>();
   for (const item of existingList) {
     if (item && item.id) {
-      map.set(item.id, item);
+      map.set(item.id.toLowerCase(), item);
     }
   }
   for (const item of incomingList) {
     if (!item || !item.id) continue;
-    const existing = map.get(item.id);
+    const key = item.id.toLowerCase();
+    const existing = map.get(key);
     if (existing) {
       const hasTerminalVerification =
         existing.status === "verified_fixed" ||
@@ -62,9 +63,10 @@ function mergeHistoryLists(
           : hasTerminalVerification
           ? existing.status
           : item.status;
-      map.set(item.id, {
+      map.set(key, {
         ...existing,
         ...item,
+        id: item.id.toLowerCase(),
         status: mergedStatus,
         durationMs:
           hasTerminalVerification &&
@@ -82,10 +84,10 @@ function mergeHistoryLists(
         patchProposal: item.patchProposal || existing.patchProposal || null,
       });
     } else {
-      map.set(item.id, item);
+      map.set(key, { ...item, id: item.id.toLowerCase() });
     }
   }
-  return Array.from(map.values()).slice(-20);
+  return Array.from(map.values()).slice(-50);
 }
 
 export default function Home() {
@@ -174,7 +176,7 @@ export default function Home() {
     try {
       window.localStorage.setItem(
         HISTORY_STORAGE_KEY,
-        JSON.stringify(history.slice(-20))
+        JSON.stringify(history.slice(-50))
       );
     } catch {
       // Ignore storage quota errors
@@ -327,10 +329,9 @@ export default function Home() {
         null
       );
       const isNoSafePatchRun =
-        result.has_safe_patch === false ||
-        (result.status === "diagnosis_available" &&
-          result.confidence >= 0.9 &&
-          activePatchForDiag === null);
+        result.status === "diagnosis_available" &&
+        result.confidence >= 0.9 &&
+        (result.has_safe_patch === false || activePatchForDiag === null);
       const recordedStatus = isNoSafePatchRun
         ? "diagnosis_no_patch"
         : result.status;
@@ -852,10 +853,9 @@ export default function Home() {
 
   const isNoSafePatch =
     diagnosis !== null &&
-    (diagnosis.has_safe_patch === false ||
-      (diagnosis.status === "diagnosis_available" &&
-        diagnosis.confidence >= 0.9 &&
-        activePatch === null));
+    diagnosis.status === "diagnosis_available" &&
+    diagnosis.confidence >= 0.9 &&
+    (diagnosis.has_safe_patch === false || activePatch === null);
 
   return (
     <div className="min-h-screen flex flex-col bg-[#090d16] text-slate-100">
@@ -1053,12 +1053,12 @@ export default function Home() {
                       ? "verification_failed"
                       : isNoSafePatch
                       ? "diagnosis_no_patch"
-                      : activeItem?.status ||
-                        (diagnosis.status === "insufficient_evidence"
-                          ? "insufficient_evidence"
-                          : diagnosis.confidence < 0.9
-                          ? "patch_blocked"
-                          : diagnosis.status);
+                      : diagnosis.status === "insufficient_evidence" ||
+                        activeItem?.status === "insufficient_evidence"
+                      ? "insufficient_evidence"
+                      : diagnosis.confidence < 0.9
+                      ? "patch_blocked"
+                      : activeItem?.status || diagnosis.status;
                   const effectiveDuration = activeItem?.durationMs;
                   const isCached = activeItem?.isCached ?? diagnosis.is_cached;
                   const originalDurationMs = activeItem?.originalDurationMs ?? diagnosis.original_duration_ms;
@@ -1132,7 +1132,11 @@ export default function Home() {
                       <AlertTriangle className="h-5 w-5 text-purple-400 shrink-0 mt-0.5" />
                       <div>
                         <h4 className="text-sm font-bold text-white font-mono flex items-center gap-2">
-                          <span>Patch Proposal Blocked</span>
+                          <span>
+                            {diagnosis.status === "insufficient_evidence"
+                              ? "Insufficient Empirical Evidence"
+                              : "Patch Proposal Blocked"}
+                          </span>
                           <span className="rounded bg-purple-500/20 border border-purple-500/40 px-2 py-0.5 text-[10px] text-purple-300 font-mono">
                             Safety Invariant Enforced
                           </span>
@@ -1212,6 +1216,15 @@ export default function Home() {
           onSelectHistoryItem={handleSelectHistoryItem}
           activeInspectId={inspectedRunId}
           isLoadingInspect={isLoadingInspect}
+          onClearHistory={() => {
+            try {
+              window.localStorage.removeItem(HISTORY_STORAGE_KEY);
+            } catch {
+              // Ignore
+            }
+            setHistory([]);
+            investigationCache.current.clear();
+          }}
         />
       </main>
 
