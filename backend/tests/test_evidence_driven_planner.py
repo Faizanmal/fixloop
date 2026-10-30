@@ -13,51 +13,39 @@ Validates:
 7. Hybrid tooling (deterministic tools for factual checks and NVIDIA Nemotron model via Nebius for planning).
 """
 
-import math
 import hashlib
+import math
 from pathlib import Path
-from typing import Dict, Any, List
+
 import pytest
 
+from backend.app.agent.engine import (
+    ContradictionDetector,
+    DeterministicFactAnalyzer,
+    DiagnosticBudget,
+    DiagnosticEngine,
+    DiagnosticEngineResult,
+    DiagnosticTestSelector,
+    UncertaintyEstimator,
+)
 from backend.app.core.models import (
-    DiagnosisStatus,
     DiagnoseHypothesis,
-    HypothesisCategory,
+    DiagnosisStatus,
     EvidenceItem,
     EvidenceType,
-    EvidenceRecord,
-    ContradictionReport,
-    RecommendTest,
-)
-from backend.app.agent.engine import (
-    DiagnosticEngine,
-    DiagnosticBudget,
-    DeterministicFactAnalyzer,
-    ContradictionDetector,
-    UncertaintyEstimator,
-    DiagnosticTestSelector,
-    DiagnosticEngineResult,
-    SelectedTestRecord,
+    HypothesisCategory,
 )
 from backend.app.evidence.collectors import (
-    LogCollector,
     DockerStateCollector,
-    ComposeConfigCollector,
-    SourceCodeCollector,
     EnvironmentCollector,
-    compute_fingerprint,
+    LogCollector,
 )
 from backend.app.evidence.tools import (
-    DiagnosticToolRegistry,
-    ToolProbeHTTP,
-    ToolProbeTCP,
     ToolCheckEnvKey,
+    ToolProbeTCP,
     ToolReadApprovedFile,
-    BaseDiagnosticTool,
-    DiagnosticToolResult,
 )
 from backend.app.llm.client import NebiusLLMClient
-from backend.app.llm.mock_provider import MockLLMProvider
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCENARIOS_DIR = REPO_ROOT / "scenarios"
@@ -66,6 +54,7 @@ SCENARIOS_DIR = REPO_ROOT / "scenarios"
 # ==============================================================================
 # TEST CASE 1: Logs are normal, but health check fails
 # ==============================================================================
+
 
 @pytest.mark.asyncio
 async def test_logs_normal_but_health_check_fails():
@@ -117,15 +106,22 @@ async def test_logs_normal_but_health_check_fails():
     contra_ids = [c.id for c in contradictions]
     assert "contra-log-healthy-state-unhealthy" in contra_ids
 
-    unhealthy_contra = next(c for c in contradictions if c.id == "contra-log-healthy-state-unhealthy")
+    unhealthy_contra = next(
+        c for c in contradictions if c.id == "contra-log-healthy-state-unhealthy"
+    )
     assert unhealthy_contra.severity == "HIGH"
-    assert "route mismatch" in unhealthy_contra.implication.lower() or "hanging" in unhealthy_contra.implication.lower()
+    assert (
+        "route mismatch" in unhealthy_contra.implication.lower()
+        or "hanging" in unhealthy_contra.implication.lower()
+    )
 
     # Step 3: Before active probe execution, verify competing hypotheses & high uncertainty
-    initial_hypotheses, missing_info, initial_uncertainty = engine.generate_hypotheses_from_evidence(
-        evidence=evidence,
-        facts=facts,
-        executed_tests=[],
+    initial_hypotheses, _missing_info, initial_uncertainty = (
+        engine.generate_hypotheses_from_evidence(
+            evidence=evidence,
+            facts=facts,
+            executed_tests=[],
+        )
     )
     assert len(initial_hypotheses) == 2
     hyp_cats = [h.category for h in initial_hypotheses]
@@ -136,7 +132,9 @@ async def test_logs_normal_but_health_check_fails():
     assert all(h.confidence < 0.90 for h in initial_hypotheses)
     assert initial_uncertainty >= 0.40
 
-    prior_entropy = UncertaintyEstimator.calculate_entropy([h.confidence for h in initial_hypotheses])
+    prior_entropy = UncertaintyEstimator.calculate_entropy(
+        [h.confidence for h in initial_hypotheses]
+    )
     assert prior_entropy > 0.80
 
     # Step 4: Verify test selector selects the discriminating probe
@@ -155,7 +153,9 @@ async def test_logs_normal_but_health_check_fails():
     assert selected_test.utility_score > 0.0
 
     # Step 5: Run full investigation
-    result: DiagnosticEngineResult = await engine.run_investigation(project_root=scenario_path)
+    result: DiagnosticEngineResult = await engine.run_investigation(
+        project_root=scenario_path
+    )
 
     # Acceptance Invariants
     assert result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
@@ -171,7 +171,9 @@ async def test_logs_normal_but_health_check_fails():
     # Competing hypothesis is now refuted with probe provenance
     refuted_h = next(h for h in result.hypotheses if h.id == "hyp-healthcheck-2")
     assert refuted_h.confidence <= 0.05
-    assert any("[provenance: ACTIVE_PROBE]" in c for c in refuted_h.contradicting_evidence)
+    assert any(
+        "[provenance: ACTIVE_PROBE]" in c for c in refuted_h.contradicting_evidence
+    )
 
     # Audit log confirms execution and uncertainty reduction
     assert len(result.audit_log.selected_tests) >= 1
@@ -184,6 +186,7 @@ async def test_logs_normal_but_health_check_fails():
 # ==============================================================================
 # TEST CASE 2: Two hypotheses initially fit the evidence (EIG Selection)
 # ==============================================================================
+
 
 @pytest.mark.asyncio
 async def test_two_hypotheses_initially_fit_evidence_and_eig_selection():
@@ -211,10 +214,12 @@ async def test_two_hypotheses_initially_fit_evidence_and_eig_selection():
     facts = DeterministicFactAnalyzer.analyze_facts(evidence)
 
     # Step 2: Formulate initial hypotheses without executing tests
-    initial_hypotheses, missing_info, initial_uncertainty = engine.generate_hypotheses_from_evidence(
-        evidence=evidence,
-        facts=facts,
-        executed_tests=[],
+    initial_hypotheses, _missing_info, initial_uncertainty = (
+        engine.generate_hypotheses_from_evidence(
+            evidence=evidence,
+            facts=facts,
+            executed_tests=[],
+        )
     )
 
     assert len(initial_hypotheses) == 2
@@ -227,8 +232,12 @@ async def test_two_hypotheses_initially_fit_evidence_and_eig_selection():
     assert initial_uncertainty >= 0.30
 
     # Calculate prior Shannon entropy directly
-    prior_entropy = UncertaintyEstimator.calculate_entropy([h1.confidence, h2.confidence])
-    assert 0.70 <= prior_entropy <= 1.05, f"Expected elevated entropy for competing hypotheses, got {prior_entropy}"
+    prior_entropy = UncertaintyEstimator.calculate_entropy(
+        [h1.confidence, h2.confidence]
+    )
+    assert (
+        0.70 <= prior_entropy <= 1.05
+    ), f"Expected elevated entropy for competing hypotheses, got {prior_entropy}"
 
     # Step 3: Test EIG and Utility computation on candidate tools
     tool_tcp = ToolProbeTCP()
@@ -245,7 +254,9 @@ async def test_two_hypotheses_initially_fit_evidence_and_eig_selection():
         base_test_id="test-tcp-8000",
     )
 
-    assert eig_tcp > 0.50, f"Expected high EIG for discriminating TCP probe, got {eig_tcp}"
+    assert (
+        eig_tcp > 0.50
+    ), f"Expected high EIG for discriminating TCP probe, got {eig_tcp}"
     assert util_tcp > 0.0
     assert record_tcp.safety == "safe"
     assert record_tcp.cost == 2
@@ -253,7 +264,7 @@ async def test_two_hypotheses_initially_fit_evidence_and_eig_selection():
 
     # Non-discriminating test (e.g. read an uninformative file where both hypotheses predict same outcome)
     tool_file = ToolReadApprovedFile()
-    eig_null, util_null, record_null = DiagnosticTestSelector.compute_eig_and_utility(
+    eig_null, util_null, _record_null = DiagnosticTestSelector.compute_eig_and_utility(
         tool=tool_file,
         target="README.md",
         parameters={"path": "README.md"},
@@ -263,7 +274,9 @@ async def test_two_hypotheses_initially_fit_evidence_and_eig_selection():
         base_test_id="test-readme",
     )
     assert eig_null < 0.10
-    assert util_tcp > util_null, "Discriminating probe must have higher utility than non-discriminating read"
+    assert (
+        util_tcp > util_null
+    ), "Discriminating probe must have higher utility than non-discriminating read"
 
     # Step 4: Run full investigation
     result = await engine.run_investigation(project_root=scenario_path)
@@ -274,10 +287,14 @@ async def test_two_hypotheses_initially_fit_evidence_and_eig_selection():
     assert result.uncertainty <= 0.05
 
     # Top hypothesis confirms port mismatch
-    assert any("8000" in h.description and "5000" in h.description for h in result.hypotheses)
+    assert any(
+        "8000" in h.description and "5000" in h.description for h in result.hypotheses
+    )
 
     # Competing hypothesis is refuted
-    refuted = next((h for h in result.hypotheses if h.id == "hyp-port-competing-2"), None)
+    refuted = next(
+        (h for h in result.hypotheses if h.id == "hyp-port-competing-2"), None
+    )
     if refuted:
         assert refuted.confidence <= 0.05
         assert len(refuted.contradicting_evidence) > 0
@@ -286,6 +303,7 @@ async def test_two_hypotheses_initially_fit_evidence_and_eig_selection():
 # ==============================================================================
 # TEST CASE 3: Evidence remains insufficient (Never invent observations)
 # ==============================================================================
+
 
 @pytest.mark.asyncio
 async def test_evidence_remains_insufficient_never_invents_observations():
@@ -313,7 +331,10 @@ async def test_evidence_remains_insufficient_never_invents_observations():
     # Acceptance Invariant 2: Hypotheses reflect external ambiguity
     assert len(result.hypotheses) >= 1
     top_h = result.hypotheses[0]
-    assert any(k in top_h.description.lower() for k in ["external", "upstream", "outage", "third-party"])
+    assert any(
+        k in top_h.description.lower()
+        for k in ["external", "upstream", "outage", "third-party"]
+    )
     assert top_h.confidence < 0.90
 
     # Acceptance Invariant 3: Zero invented observations
@@ -325,20 +346,37 @@ async def test_evidence_remains_insufficient_never_invents_observations():
         # Source must be an actual known collector, tool, or nebius model interpretation
         assert any(
             obs.get("source", "").startswith(prefix)
-            for prefix in ["project:", "docker", "compose", "source", "container", "env", "tool:", "nebius:", "logs"]
+            for prefix in [
+                "project:",
+                "docker",
+                "compose",
+                "source",
+                "container",
+                "env",
+                "tool:",
+                "nebius:",
+                "logs",
+            ]
         ), f"Unexpected unverified observation source: {obs.get('source')}"
 
     # Acceptance Invariant 4: Explicit missing information recorded
     assert len(result.missing_information) > 0
-    assert any("external" in m.lower() or "upstream" in m.lower() or "third-party" in m.lower() for m in result.missing_information)
+    assert any(
+        "external" in m.lower() or "upstream" in m.lower() or "third-party" in m.lower()
+        for m in result.missing_information
+    )
 
     # Acceptance Invariant 5: Stop reason reflects external dependency limitation
-    assert "external" in result.audit_log.stop_reason.lower() or "upstream" in result.audit_log.stop_reason.lower()
+    assert (
+        "external" in result.audit_log.stop_reason.lower()
+        or "upstream" in result.audit_log.stop_reason.lower()
+    )
 
 
 # ==============================================================================
 # TEST CASE 4: Evidence Provenance Integrity
 # ==============================================================================
+
 
 def test_evidence_provenance_across_all_collectors():
     """Validates that all evidence collectors populate provenance fields:
@@ -361,7 +399,9 @@ def test_evidence_provenance_across_all_collectors():
 
     # 2. DockerStateCollector
     raw_inspect = '{"Id": "c123456789abcdef", "State": {"Status": "running", "Health": {"Status": "unhealthy"}}}'
-    inspect_items = DockerStateCollector.collect_from_json(raw_inspect, source_label="inspect.json")
+    inspect_items = DockerStateCollector.collect_from_json(
+        raw_inspect, source_label="inspect.json"
+    )
     assert len(inspect_items) >= 1
     for item in inspect_items:
         assert item.collector == "DockerStateCollector"
@@ -374,7 +414,9 @@ def test_evidence_provenance_across_all_collectors():
         "DATABASE_PASSWORD": "super_secret_production_password_xyz",
         "API_SECRET_TOKEN": "Bearer secret_token_abc_123",
     }
-    env_items = EnvironmentCollector.collect_presence(raw_env, expected_keys={"PORT", "DATABASE_PASSWORD"})
+    env_items = EnvironmentCollector.collect_presence(
+        raw_env, expected_keys={"PORT", "DATABASE_PASSWORD"}
+    )
     assert len(env_items) == 1
     env_item = env_items[0]
     assert env_item.collector == "EnvironmentCollector"
@@ -387,6 +429,7 @@ def test_evidence_provenance_across_all_collectors():
 # ==============================================================================
 # TEST CASE 5: Contradiction Detection Invariants
 # ==============================================================================
+
 
 def test_contradiction_detection_factual_invariants():
     """Validates that ContradictionDetector catches all 5 classes of factual contradictions:
@@ -482,6 +525,7 @@ def test_contradiction_detection_factual_invariants():
 # TEST CASE 6: Shannon Entropy & Uncertainty Calibration
 # ==============================================================================
 
+
 def test_shannon_entropy_and_uncertainty_calibration():
     """Validates mathematical properties of Shannon entropy calculation:
     - Equal distribution [0.5, 0.5] yields H = 1.0 bit
@@ -522,13 +566,16 @@ def test_shannon_entropy_and_uncertainty_calibration():
         DiagnoseHypothesis(description="Hyp Winner", confidence=0.98),
         DiagnoseHypothesis(description="Hyp Loser", confidence=0.02),
     ]
-    u_conclusive, _ = UncertaintyEstimator.estimate_uncertainty(hyps_conclusive, facts={}, has_conclusive_evidence=True)
+    u_conclusive, _ = UncertaintyEstimator.estimate_uncertainty(
+        hyps_conclusive, facts={}, has_conclusive_evidence=True
+    )
     assert u_conclusive <= 0.05
 
 
 # ==============================================================================
 # TEST CASE 7: Hybrid Tooling & Nebius NVIDIA Model Architecture
 # ==============================================================================
+
 
 @pytest.mark.asyncio
 async def test_hybrid_tooling_with_nebius_nvidia_model():
@@ -565,7 +612,8 @@ async def test_hybrid_tooling_with_nebius_nvidia_model():
 
     # Verify model interpretation in audit log observations
     model_obs = [
-        obs for obs in result.audit_log.observations
+        obs
+        for obs in result.audit_log.observations
         if obs.get("type") == "MODEL_REASONING" or "nebius:" in obs.get("source", "")
     ]
     assert len(model_obs) >= 1

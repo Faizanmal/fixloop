@@ -8,7 +8,7 @@ Simulates a traditional log-based debugging workflow:
 
 import time
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any
 
 from backend.app.eval.models import ScenarioEvaluationRecord
 
@@ -17,14 +17,20 @@ class LogOnlyBaselineRunner:
     """Evaluates benchmark scenarios using only raw logs without evidence collectors or probes."""
 
     @staticmethod
-    def evaluate_scenario(scenario_dir: Path, manifest: Dict[str, Any]) -> ScenarioEvaluationRecord:
+    def evaluate_scenario(
+        scenario_dir: Path, manifest: dict[str, Any]
+    ) -> ScenarioEvaluationRecord:
         start_time = time.perf_counter()
         scenario_id = manifest["scenario_id"]
         scenario_name = manifest["name"]
         expected_root_cause = manifest.get("expected_root_cause_type", "UNKNOWN")
 
         logs_file = scenario_dir / "logs.txt"
-        logs_content = logs_file.read_text(encoding="utf-8", errors="replace") if logs_file.exists() else ""
+        logs_content = (
+            logs_file.read_text(encoding="utf-8", errors="replace")
+            if logs_file.exists()
+            else ""
+        )
 
         # Measured token usage for prompt & completion (approx ~4 chars per token)
         prompt_text = f"You are a software debugger. Analyze these application logs and fix the issue:\n\n{logs_content}"
@@ -83,11 +89,15 @@ class LogOnlyBaselineRunner:
             # Baseline sees connection reset / timeout and hallucinates a local fix
             identified_root_cause = "LOCAL_NETWORK_CONFIG_ERROR"
             root_cause_accuracy = False
-            correct_insufficient_evidence = False  # Failed to recognize insufficient evidence!
+            correct_insufficient_evidence = (
+                False  # Failed to recognize insufficient evidence!
+            )
             patch_generated = True  # Hallucinated a local code patch
             patch_applied_cleanly = False
             actual_verification_success = False
-            false_claims_of_success = True  # Claimed local code patch fixes external outage
+            false_claims_of_success = (
+                True  # Claimed local code patch fixes external outage
+            )
 
         # Scenario E: Misleading Database Logs (Kernel OOM Exit Code 137)
         elif scenario_id == "scenario_e_misleading_logs":
@@ -123,9 +133,13 @@ class LogOnlyBaselineRunner:
             # In baseline, agent asserts: "Fixed! Patch applied successfully."
             # But the patch actually introduces a syntax/runtime error!
             actual_verification_success = False
-            false_claims_of_success = True  # Falsely claimed success without sandbox execution!
+            false_claims_of_success = (
+                True  # Falsely claimed success without sandbox execution!
+            )
 
-        duration_ms = int((time.perf_counter() - start_time) * 1000) + 120  # Fast log parse
+        duration_ms = (
+            int((time.perf_counter() - start_time) * 1000) + 120
+        )  # Fast log parse
         total_tokens = prompt_tokens + completion_tokens
         # $0.35 per 1M tokens = $0.00000035 per token
         estimated_cost = round(total_tokens * 0.00000035, 6)

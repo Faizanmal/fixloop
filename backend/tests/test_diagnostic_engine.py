@@ -10,27 +10,20 @@ Validates:
 - Environment variable masking (zero secret disclosure).
 """
 
-import pytest
 from pathlib import Path
 
-from backend.app.core.models import DiagnosisStatus
+import pytest
+
 from backend.app.agent.engine import (
-    DiagnosticEngine,
     DiagnosticBudget,
-    DeterministicFactAnalyzer,
+    DiagnosticEngine,
 )
+from backend.app.core.models import DiagnosisStatus
 from backend.app.evidence.collectors import (
     ApprovedPathValidator,
     EnvironmentCollector,
     SecurityBoundaryError,
 )
-from backend.app.evidence.tools import (
-    DiagnosticToolRegistry,
-    ToolProbeHTTP,
-    ToolProbeTCP,
-    ToolCheckEnvKey,
-)
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCENARIOS_DIR = REPO_ROOT / "scenarios"
@@ -75,7 +68,10 @@ async def test_scenario_b_healthcheck_mismatch_requires_additional_diagnostic():
     # Final outcome is diagnosis_available with high confidence
     assert result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
     assert result.confidence >= 0.95
-    assert any("/healthz" in h.description and "/health" in h.description for h in result.hypotheses)
+    assert any(
+        "/healthz" in h.description and "/health" in h.description
+        for h in result.hypotheses
+    )
 
 
 @pytest.mark.asyncio
@@ -89,7 +85,9 @@ async def test_scenario_c_port_mismatch():
 
     assert result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
     assert result.confidence >= 0.95
-    assert any("8000" in h.description and "5000" in h.description for h in result.hypotheses)
+    assert any(
+        "8000" in h.description and "5000" in h.description for h in result.hypotheses
+    )
 
 
 @pytest.mark.asyncio
@@ -103,7 +101,10 @@ async def test_scenario_d_insufficient_evidence():
 
     # Acceptance Criterion: Scenario D ends with insufficient_evidence
     assert result.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
-    assert any("external" in h.description.lower() or "upstream" in h.description.lower() for h in result.hypotheses)
+    assert any(
+        "external" in h.description.lower() or "upstream" in h.description.lower()
+        for h in result.hypotheses
+    )
     assert "external" in result.audit_log.stop_reason.lower()
 
 
@@ -115,7 +116,9 @@ async def test_bounded_budget_enforcement():
     # Restrict budget to 0 steps allowed
     starved_budget = DiagnosticBudget(max_steps=0, max_cost=0)
     engine = DiagnosticEngine()
-    result = await engine.run_investigation(project_root=scenario_path, budget=starved_budget)
+    result = await engine.run_investigation(
+        project_root=scenario_path, budget=starved_budget
+    )
 
     # Must halt without executing unbudgeted tests
     assert len(result.audit_log.selected_tests) == 0
@@ -146,10 +149,14 @@ def test_security_boundary_validator_blocks_path_traversal():
         ApprovedPathValidator.validate_and_resolve(approved_root, "../../etc/passwd")
 
     with pytest.raises(SecurityBoundaryError):
-        ApprovedPathValidator.validate_and_resolve(approved_root, "../scenario_b_healthcheck_mismatch/main.py")
+        ApprovedPathValidator.validate_and_resolve(
+            approved_root, "../scenario_b_healthcheck_mismatch/main.py"
+        )
 
     with pytest.raises(SecurityBoundaryError):
-        ApprovedPathValidator.validate_and_resolve(approved_root, "/Windows/System32/drivers")
+        ApprovedPathValidator.validate_and_resolve(
+            approved_root, "/Windows/System32/drivers"
+        )
 
 
 def test_environment_collector_masks_sensitive_values():
@@ -160,7 +167,9 @@ def test_environment_collector_masks_sensitive_values():
         "AUTH_BEARER_TOKEN": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
         "APP_ENV": "production",
     }
-    evidence = EnvironmentCollector.collect_presence(raw_env, expected_keys={"PORT", "DATABASE_PASSWORD"})
+    evidence = EnvironmentCollector.collect_presence(
+        raw_env, expected_keys={"PORT", "DATABASE_PASSWORD"}
+    )
     assert len(evidence) == 1
 
     content = evidence[0].content

@@ -6,18 +6,17 @@ One-command diagnostic tool for:
 3. Local application workspaces: `python -m backend.app.cli .`
 """
 
-import sys
-import subprocess
-import json
-import asyncio
 import argparse
+import asyncio
+import json
+import subprocess
 from pathlib import Path
+
 import httpx
 
-from backend.app.core.config import settings
-from backend.app.core.models import DiagnoseRequest, DiagnosisStatus
-from backend.app.llm.client import NebiusLLMClient
 from backend.app.agent.engine import DiagnosticEngine
+from backend.app.core.models import DiagnoseRequest
+from backend.app.llm.client import NebiusLLMClient
 
 
 def get_docker_telemetry(container_name: str):
@@ -29,6 +28,7 @@ def get_docker_telemetry(container_name: str):
             capture_output=True,
             text=True,
             timeout=10,
+            check=False,
         )
         logs = (logs_res.stdout + "\n" + logs_res.stderr).strip()
     except Exception as e:
@@ -40,6 +40,7 @@ def get_docker_telemetry(container_name: str):
             capture_output=True,
             text=True,
             timeout=10,
+            check=False,
         )
         if inspect_res.returncode == 0:
             parsed = json.loads(inspect_res.stdout)
@@ -67,7 +68,10 @@ async def probe_live_url(url: str):
             )
             return summary, {"status_code": resp.status_code, "url": url}
     except Exception as e:
-        return f"HTTP Probe connection failed to {url}: {e}", {"error": str(e), "url": url}
+        return f"HTTP Probe connection failed to {url}: {e}", {
+            "error": str(e),
+            "url": url,
+        }
 
 
 async def run_cli():
@@ -116,7 +120,7 @@ async def run_cli():
         return
 
     # 2. Remote URL Target
-    if target.startswith("http://") or target.startswith("https://"):
+    if target.startswith(("http://", "https://")):
         logs, inspect_data = await probe_live_url(target)
         service_name = target.split("//")[-1].split("/")[0]
     # 3. Docker Container Target
@@ -128,10 +132,16 @@ async def run_cli():
     req = DiagnoseRequest(
         service_name=service_name,
         logs=logs,
-        docker_inspect=inspect_data if isinstance(inspect_data, dict) and "error" not in inspect_data else None,
+        docker_inspect=(
+            inspect_data
+            if isinstance(inspect_data, dict) and "error" not in inspect_data
+            else None
+        ),
     )
 
-    print(f"[*] Ingesting live telemetry ({len(logs)} chars). Calling NVIDIA Nemotron via Nebius...")
+    print(
+        f"[*] Ingesting live telemetry ({len(logs)} chars). Calling NVIDIA Nemotron via Nebius..."
+    )
     res = await client.diagnose(req)
 
     print("\n" + "=" * 70)

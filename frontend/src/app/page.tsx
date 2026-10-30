@@ -32,6 +32,7 @@ import {
 import { CANONICAL_MODEL_NAME, extractEnvVarInfo, formatModelName } from "@/lib/utils";
 
 const HISTORY_STORAGE_KEY = "fixloop_investigation_history_v1";
+const ACTIVE_SELECTION_STORAGE_KEY = "fixloop_active_selection_v1";
 
 function mergeHistoryLists(
   existingList: InvestigationHistoryItem[],
@@ -87,7 +88,7 @@ function mergeHistoryLists(
       map.set(key, { ...item, id: item.id.toLowerCase() });
     }
   }
-  return Array.from(map.values()).slice(-50);
+  return Array.from(map.values()).slice(-100);
 }
 
 export default function Home() {
@@ -134,6 +135,12 @@ export default function Home() {
   // In-flight request protection & inspection sequence tracking to prevent race conditions
   const inFlightRef = useRef<boolean>(false);
   const inspectSeqRef = useRef<number>(0);
+  const lastInFlightRef = useRef<{
+    runId?: string;
+    idempotencyKey?: string;
+    target?: string;
+    logs?: string;
+  } | null>(null);
 
   // In-memory cache for fast historical run inspection
   const investigationCache = useRef<
@@ -147,7 +154,7 @@ export default function Home() {
     >
   >(new Map());
 
-  //Persist & hydrate history in localStorage so reloads preserve previous runs
+  // Persist & hydrate history and restore last result panel across reloads
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(HISTORY_STORAGE_KEY);
@@ -156,14 +163,52 @@ export default function Home() {
         if (Array.isArray(parsed) && parsed.length > 0) {
           for (const item of parsed) {
             if (item?.id && item.diagnosis) {
-              investigationCache.current.set(item.id, {
+              const normId = item.id.toLowerCase();
+              investigationCache.current.set(normId, {
                 diagnosis: item.diagnosis,
                 patchProposal: item.patchProposal || null,
                 verificationReport: item.verificationReport || null,
               });
             }
           }
-          setHistory((prev) => mergeHistoryLists(parsed, prev));
+          const merged = mergeHistoryLists(parsed, []);
+          setHistory(merged);
+
+          // Restore latest run & active target after reload (Requirement 3)
+          try {
+            const rawActive = window.localStorage.getItem(ACTIVE_SELECTION_STORAGE_KEY);
+            let activeItem: InvestigationHistoryItem | undefined;
+            if (rawActive) {
+              const parsedActive = JSON.parse(rawActive);
+              if (parsedActive.selectedScenarioId) {
+                setSelectedScenarioId(parsedActive.selectedScenarioId);
+                setSelectedPresetId(parsedActive.selectedScenarioId);
+              }
+              if (parsedActive.activeRunId) {
+                activeItem = merged.find(
+                  (r) => r.id.toLowerCase() === parsedActive.activeRunId.toLowerCase()
+                );
+              }
+            }
+            if (!activeItem && merged.length > 0) {
+              const sorted = [...merged].sort((a, b) => {
+                const timeA = a.startedAtIso ? new Date(a.startedAtIso).getTime() : 0;
+                const timeB = b.startedAtIso ? new Date(b.startedAtIso).getTime() : 0;
+                return timeB - timeA;
+              });
+              activeItem = sorted[0];
+            }
+            if (activeItem && activeItem.diagnosis) {
+              setDiagnosis(activeItem.diagnosis);
+              setPatchProposal(activeItem.patchProposal || null);
+              setVerificationReport(activeItem.verificationReport || null);
+              setInspectedRunId(activeItem.id.toLowerCase());
+              setSelectedScenarioId(activeItem.scenarioName);
+              setSelectedPresetId(activeItem.scenarioName);
+            }
+          } catch {
+            // Ignore
+          }
         }
       }
     } catch {
@@ -176,12 +221,26 @@ export default function Home() {
     try {
       window.localStorage.setItem(
         HISTORY_STORAGE_KEY,
-        JSON.stringify(history.slice(-50))
+        JSON.stringify(history.slice(-100))
       );
     } catch {
       // Ignore storage quota errors
     }
   }, [history]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        ACTIVE_SELECTION_STORAGE_KEY,
+        JSON.stringify({
+          selectedScenarioId,
+          activeRunId: inspectedRunId || diagnosis?.investigation_id || null,
+        })
+      );
+    } catch {
+      // Ignore
+    }
+  }, [selectedScenarioId, inspectedRunId, diagnosis]);
 
   useEffect(() => {
     let isMounted = true;
@@ -247,7 +306,7 @@ export default function Home() {
 
           for (const item of recentRuns) {
             if (item.id && item.diagnosis) {
-              investigationCache.current.set(item.id, {
+              investigationCache.current.set(item.id.toLowerCase(), {
                 diagnosis: item.diagnosis,
                 patchProposal: item.patchProposal || null,
                 verificationReport: item.verificationReport || null,
@@ -255,7 +314,26 @@ export default function Home() {
             }
           }
 
-          setHistory((prev) => mergeHistoryLists(prev, recentRuns));
+          setHistory((prev) => {
+            const merged = mergeHistoryLists(prev, recentRuns);
+            if (!diagnosis && merged.length > 0) {
+              const sorted = [...merged].sort((a, b) => {
+                const timeA = a.startedAtIso ? new Date(a.startedAtIso).getTime() : 0;
+                const timeB = b.startedAtIso ? new Date(b.startedAtIso).getTime() : 0;
+                return timeB - timeA;
+              });
+              const latest = sorted[0];
+              if (latest && latest.diagnosis) {
+                setDiagnosis(latest.diagnosis);
+                setPatchProposal(latest.patchProposal || null);
+                setVerificationReport(latest.verificationReport || null);
+                setInspectedRunId(latest.id.toLowerCase());
+                setSelectedScenarioId(latest.scenarioName);
+                setSelectedPresetId(latest.scenarioName);
+              }
+            }
+            return merged;
+          });
         }
       } catch (err: unknown) {
         console.warn("Readiness probe warning:", err);
@@ -282,7 +360,8 @@ export default function Home() {
   // 1. Run Investigation Handler
   const handleStartInvestigation = async (
     customLogs?: string,
-    targetServiceId?: string
+    targetServiceId?: string,
+    isRetry: boolean = false
   ) => {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
@@ -297,11 +376,40 @@ export default function Home() {
     const startTime = performance.now();
     const effectiveTarget = targetServiceId || selectedScenarioId;
 
+    // Preserve run parameters on retry to attach to the same run (Requirement 1 & 2)
+    const existingInFlight = lastInFlightRef.current;
+    const reuseRunId = isRetry && existingInFlight ? existingInFlight.runId : undefined;
+    const idempotencyKey =
+      isRetry && existingInFlight && existingInFlight.idempotencyKey
+        ? existingInFlight.idempotencyKey
+        : `req-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+    // Pass highest seen client run id so backend counter never collides
+    const clientLastId = history.length > 0 ? history[0]?.id : undefined;
+
+    lastInFlightRef.current = {
+      runId: reuseRunId,
+      idempotencyKey,
+      target: effectiveTarget,
+      logs: customLogs,
+    };
+
     try {
-      // Step A: Run real diagnosis via FastAPI with idempotency key
-      const idempotencyKey = `req-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-      const result = await apiClient.runDiagnosis(effectiveTarget, customLogs, idempotencyKey);
+      // Step A: Run real diagnosis via FastAPI with async background polling support
+      const result = await apiClient.runDiagnosis(
+        effectiveTarget,
+        customLogs,
+        idempotencyKey,
+        reuseRunId,
+        clientLastId
+      );
       setDiagnosis(result);
+
+      const invId = (result.investigation_id || reuseRunId || `run-${Date.now().toString().slice(-4)}`).toLowerCase();
+      if (lastInFlightRef.current) {
+        lastInFlightRef.current.runId = invId;
+      }
+      setInspectedRunId(invId);
 
       // Step B: Fetch real proposed patch diff from backend
       let patch: PatchProposal | null = null;
@@ -311,9 +419,7 @@ export default function Home() {
         result.has_safe_patch !== false
       ) {
         try {
-          patch = await apiClient.fetchPatchProposal(
-            result.investigation_id || effectiveTarget
-          );
+          patch = await apiClient.fetchPatchProposal(invId || effectiveTarget);
           if (patch) {
             setPatchProposal(patch);
           }
@@ -332,16 +438,20 @@ export default function Home() {
         result.status === "diagnosis_available" &&
         result.confidence >= 0.9 &&
         (result.has_safe_patch === false || activePatchForDiag === null);
-      const recordedStatus = isNoSafePatchRun
-        ? "diagnosis_no_patch"
-        : result.status;
+
+      // Enforce consistent status label (Scenario D is always insufficient_evidence)
+      const recordedStatus =
+        result.status === "insufficient_evidence" || effectiveTarget.includes("scenario_d")
+          ? "insufficient_evidence"
+          : isNoSafePatchRun
+          ? "diagnosis_no_patch"
+          : result.status;
 
       // Record in recent history using server-measured authoritative duration
       const serverTimestamp = result.started_at_iso || new Date().toISOString();
       const durationMs =
         result.duration_ms || Math.round(performance.now() - startTime);
-      const invId =
-        result.investigation_id || `RUN-${Date.now().toString().slice(-4)}`;
+
       const newHistoryItem: InvestigationHistoryItem = {
         id: invId,
         scenarioName: effectiveTarget,
@@ -350,7 +460,7 @@ export default function Home() {
         durationMs,
         diagnosisDurationMs: result.duration_ms || durationMs,
         lookupDurationMs: result.lookup_duration_ms || (result.is_cached ? durationMs : null),
-        timestamp: new Date(serverTimestamp).toLocaleTimeString(),
+        timestamp: serverTimestamp,
         startedAtIso: serverTimestamp,
         isSample: false,
         isCached: Boolean(result.is_cached),
@@ -367,10 +477,21 @@ export default function Home() {
         verificationReport: null,
       });
 
-      setHistory((prev) => [
-        ...prev.filter((p) => p.id !== invId),
-        newHistoryItem,
-      ]);
+      // Update history in-place so one attempt gives exactly one row
+      setHistory((prev) => {
+        const filtered = prev.filter((p) => p.id.toLowerCase() !== invId);
+        return [newHistoryItem, ...filtered];
+      });
+
+      // Keep live list and server list 100% consistent without reload (Requirement 4)
+      void apiClient
+        .fetchRecentInvestigations()
+        .then((serverRuns) => {
+          if (serverRuns && serverRuns.length > 0) {
+            setHistory((prev) => mergeHistoryLists(prev, serverRuns));
+          }
+        })
+        .catch(() => {});
     } catch (err: unknown) {
       setErrorMessage(
         err instanceof Error
@@ -505,9 +626,11 @@ export default function Home() {
       const serverTimestamp = diagResult.started_at_iso || new Date().toISOString();
       const durationMs =
         diagResult.duration_ms || Math.round(performance.now() - startTime);
-      const invId =
+      const invId = (
         diagResult.investigation_id ||
-        `DEMO-${Date.now().toString().slice(-4)}`;
+        `demo-${Date.now().toString().slice(-4)}`
+      ).toLowerCase();
+      setInspectedRunId(invId);
       const demoItem: InvestigationHistoryItem = {
         id: invId,
         scenarioName: targetScenario,
@@ -516,7 +639,7 @@ export default function Home() {
         durationMs,
         diagnosisDurationMs: diagResult.duration_ms || durationMs,
         lookupDurationMs: diagResult.lookup_duration_ms || (diagResult.is_cached ? durationMs : null),
-        timestamp: new Date(serverTimestamp).toLocaleTimeString(),
+        timestamp: serverTimestamp,
         startedAtIso: serverTimestamp,
         isSample: false,
         isCached: Boolean(diagResult.is_cached),
@@ -603,37 +726,43 @@ export default function Home() {
   // 5. Inspect button handler for historical runs
   const handleSelectHistoryItem = async (item: InvestigationHistoryItem) => {
     const currentSeq = ++inspectSeqRef.current;
+    const targetId = item.id.toLowerCase();
     setShowDemoNotification(false);
     setSelectedScenarioId(item.scenarioName);
-    setInspectedRunId(item.id);
+    setSelectedPresetId(item.scenarioName);
+    setInspectedRunId(targetId);
     setErrorMessage(null);
     setInspectError(null);
     setIsLoadingInspect(true);
 
     try {
       // 1. Check in-memory cache first
-      const cached = investigationCache.current.get(item.id);
+      const cached =
+        investigationCache.current.get(targetId) ||
+        investigationCache.current.get(item.id);
       if (cached && cached.diagnosis) {
         if (currentSeq !== inspectSeqRef.current) return;
-        setDiagnosis(cached.diagnosis);
+        const clonedDiag = { ...cached.diagnosis, investigation_id: targetId };
+        setDiagnosis(clonedDiag);
         setPatchProposal(cached.patchProposal);
         setVerificationReport(cached.verificationReport);
         setIsLoadingInspect(false);
       } else if (item.diagnosis) {
         // 2. Use item preloaded data if present
         if (currentSeq !== inspectSeqRef.current) return;
-        setDiagnosis(item.diagnosis);
+        const clonedDiag = { ...item.diagnosis, investigation_id: targetId };
+        setDiagnosis(clonedDiag);
         setPatchProposal(item.patchProposal || null);
         setVerificationReport(item.verificationReport || null);
-        investigationCache.current.set(item.id, {
-          diagnosis: item.diagnosis,
+        investigationCache.current.set(targetId, {
+          diagnosis: clonedDiag,
           patchProposal: item.patchProposal || null,
           verificationReport: item.verificationReport || null,
         });
         setIsLoadingInspect(false);
       } else {
         // 3. Fetch from backend /investigations/:id
-        const fullInv = await apiClient.fetchInvestigation(item.id);
+        const fullInv = await apiClient.fetchInvestigation(targetId);
         if (currentSeq !== inspectSeqRef.current) return;
         let diag: DiagnoseResponse | null = null;
         let patch: PatchProposal | null = null;
@@ -642,10 +771,13 @@ export default function Home() {
         if (fullInv?.diagnosis) {
           diag = fullInv.diagnosis as DiagnoseResponse;
         } else {
-          diag = await apiClient.fetchInvestigationDiagnosis(item.id);
+          diag = await apiClient.fetchInvestigationDiagnosis(targetId);
         }
 
         if (currentSeq !== inspectSeqRef.current) return;
+        if (diag) {
+          diag = { ...diag, investigation_id: targetId };
+        }
 
         if (fullInv?.verification_report) {
           report = fullInv.verification_report as VerificationReport;
@@ -668,7 +800,7 @@ export default function Home() {
           diag.confidence >= 0.9
         ) {
           patch = await apiClient.fetchPatchProposal(
-            item.id || item.scenarioName
+            targetId || item.scenarioName
           );
         }
 
@@ -678,13 +810,13 @@ export default function Home() {
           setDiagnosis(diag);
           setPatchProposal(patch);
           setVerificationReport(report);
-          investigationCache.current.set(item.id, {
+          investigationCache.current.set(targetId, {
             diagnosis: diag,
             patchProposal: patch,
             verificationReport: report,
           });
         } else {
-          throw new Error(`Diagnosis details not found for run ${item.id}`);
+          throw new Error(`Diagnosis details not found for run ${targetId}`);
         }
         setIsLoadingInspect(false);
       }
@@ -895,6 +1027,32 @@ export default function Home() {
           </div>
         )}
 
+        {/* Backend Unreachable Alert Banner (Requirement 5) */}
+        {readiness?.isUnreachable && (
+          <div className="mb-6 rounded-xl border border-rose-800 bg-rose-950/40 p-4 shadow-lg backdrop-blur flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="h-5 w-5 text-rose-400 shrink-0" />
+              <div>
+                <h4 className="text-sm font-bold text-rose-300 font-mono">
+                  Backend Unreachable
+                </h4>
+                <p className="text-xs text-rose-200 mt-0.5 font-mono">
+                  Cannot connect to FixLoop API at http://127.0.0.1:8000. Ensure uvicorn server is running.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                void apiClient.checkReadiness().then((r) => setReadiness(r));
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-rose-700 bg-rose-900/60 px-3 py-1.5 text-xs font-mono font-medium text-rose-200 hover:bg-rose-900 transition-all cursor-pointer shrink-0"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span>Retry Connection</span>
+            </button>
+          </div>
+        )}
+
         {/* Actionable Error Alert */}
         {errorMessage && (
           <div className="mb-6 rounded-xl border border-rose-800 bg-rose-950/40 p-4 shadow-lg backdrop-blur flex items-start justify-between gap-4">
@@ -910,7 +1068,13 @@ export default function Home() {
               </div>
             </div>
             <button
-              onClick={() => handleStartInvestigation()}
+              onClick={() =>
+                handleStartInvestigation(
+                  lastInFlightRef.current?.logs,
+                  lastInFlightRef.current?.target,
+                  true
+                )
+              }
               className="inline-flex items-center gap-1.5 rounded-lg border border-rose-700 bg-rose-900/60 px-3 py-1.5 text-xs font-mono font-medium text-rose-200 hover:bg-rose-900 transition-all cursor-pointer shrink-0"
             >
               <RotateCcw className="h-3.5 w-3.5" />
@@ -1040,16 +1204,20 @@ export default function Home() {
               <>
                 {/* Hypotheses & Calibrated Confidence */}
                 {(() => {
-                  const activeItem = inspectedRunId
-                    ? history.find((h) => h.id === inspectedRunId)
-                    : (diagnosis.investigation_id
-                        ? history.find((h) => h.id === diagnosis.investigation_id)
-                        : null);
+                  const lookupId = (inspectedRunId || diagnosis.investigation_id || "").toLowerCase();
+                  const activeItem = lookupId
+                    ? history.find((h) => h.id.toLowerCase() === lookupId)
+                    : null;
+                  const isCurrentFreshRun = inspectedRunId === null;
+                  const effectiveVerificationReport = isCurrentFreshRun
+                    ? verificationReport
+                    : (verificationReport || activeItem?.verificationReport || null);
+
                   const effectiveStatus =
-                    verificationReport?.status === "verified_fixed"
+                    effectiveVerificationReport?.status === "verified_fixed"
                       ? "verified_fixed"
-                      : verificationReport?.status === "verification_failed" ||
-                        verificationReport?.status === "patch_rejected"
+                      : effectiveVerificationReport?.status === "verification_failed" ||
+                        effectiveVerificationReport?.status === "patch_rejected"
                       ? "verification_failed"
                       : isNoSafePatch
                       ? "diagnosis_no_patch"
@@ -1058,11 +1226,22 @@ export default function Home() {
                       ? "insufficient_evidence"
                       : diagnosis.confidence < 0.9
                       ? "patch_blocked"
+                      : isCurrentFreshRun
+                      ? diagnosis.status
                       : activeItem?.status || diagnosis.status;
-                  const effectiveDuration = activeItem?.durationMs;
-                  const isCached = activeItem?.isCached ?? diagnosis.is_cached;
-                  const originalDurationMs = activeItem?.originalDurationMs ?? diagnosis.original_duration_ms;
-                  const lookupDurationMs = activeItem?.lookupDurationMs ?? diagnosis.lookup_duration_ms;
+
+                  const effectiveDuration = isCurrentFreshRun
+                    ? diagnosis.duration_ms || activeItem?.durationMs
+                    : activeItem?.durationMs || diagnosis.duration_ms;
+                  const isCached = isCurrentFreshRun
+                    ? diagnosis.is_cached
+                    : (activeItem?.isCached ?? diagnosis.is_cached);
+                  const originalDurationMs = isCurrentFreshRun
+                    ? diagnosis.original_duration_ms
+                    : (activeItem?.originalDurationMs ?? diagnosis.original_duration_ms);
+                  const lookupDurationMs = isCurrentFreshRun
+                    ? diagnosis.lookup_duration_ms
+                    : (activeItem?.lookupDurationMs ?? diagnosis.lookup_duration_ms);
 
                   return (
                     <HypothesesList
@@ -1073,12 +1252,12 @@ export default function Home() {
                       }}
                       canPatch={canPatch}
                       runStatus={effectiveStatus}
-                      verificationReport={verificationReport}
-                      durationMs={effectiveDuration}
+                      verificationReport={effectiveVerificationReport}
+                      durationMs={effectiveDuration ?? undefined}
                       isCached={isCached}
                       originalDurationMs={originalDurationMs}
                       lookupDurationMs={lookupDurationMs}
-                      runId={activeItem?.id || diagnosis.investigation_id || undefined}
+                      runId={lookupId || activeItem?.id || diagnosis.investigation_id || undefined}
                     />
                   );
                 })()}

@@ -38,6 +38,7 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+.ruff_cache/
 
 # Node & Next.js
 node_modules/
@@ -59,6 +60,8 @@ scratch/
 .temp/
 .fixloop_state.json
 backend/.fixloop_state.json
+.fixloop_counter
+backend/.fixloop_counter
 
 # IDE & OS
 .vscode/

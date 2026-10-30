@@ -1,7 +1,12 @@
 "use client";
 
 import React, { useState } from "react";
-import { getStatusColor, formatDuration } from "@/lib/utils";
+import {
+  getStatusColor,
+  formatDuration,
+  formatScenarioTargetName,
+  formatRecordedTimestamp,
+} from "@/lib/utils";
 import { History, ArrowUpRight, ArrowUpDown, Eye, Trash2 } from "lucide-react";
 import { InvestigationHistoryItem } from "@/lib/api";
 
@@ -119,7 +124,7 @@ export const RecentInvestigations = React.memo(function RecentInvestigations({
           <tbody className="divide-y divide-slate-800/60 font-mono">
             {sortedHistory.map((item) => {
               const statusStyles = getStatusColor(item.status);
-              const isInspecting = item.id === activeInspectId;
+              const isInspecting = item.id.toLowerCase() === activeInspectId?.toLowerCase();
               return (
                 <tr
                   key={item.id}
@@ -154,8 +159,8 @@ export const RecentInvestigations = React.memo(function RecentInvestigations({
                     </div>
                   </td>
                   <td className="py-3 text-slate-200">
-                    <span className="font-medium">
-                      {item.scenarioName.replace("scenario_", "").replace(/_/g, " ")}
+                    <span className="font-medium text-cyan-200/90 font-mono">
+                      {formatScenarioTargetName(item.scenarioName)}
                     </span>
                   </td>
                   <td className="py-3">
@@ -187,10 +192,8 @@ export const RecentInvestigations = React.memo(function RecentInvestigations({
                       )}
                     </div>
                   </td>
-                  <td className="py-3 text-slate-500 text-[11px]" title={item.startedAtIso || item.timestamp}>
-                    {item.startedAtIso
-                      ? new Date(item.startedAtIso).toLocaleTimeString()
-                      : item.timestamp}
+                  <td className="py-3 text-slate-400 text-[11px] whitespace-nowrap" title={item.startedAtIso || item.timestamp}>
+                    {formatRecordedTimestamp(item.startedAtIso || item.timestamp)}
                   </td>
                   <td className="py-3 text-right">
                     <button

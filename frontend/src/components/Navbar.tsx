@@ -28,11 +28,15 @@ export function Navbar({
 }: NavbarProps) {
   const [showBenchmark, setShowBenchmark] = useState<boolean>(false);
   const isInitialLoad = readiness === null;
-  const isReady = readiness?.ready ?? false;
+  const isUnreachable =
+    readiness?.isUnreachable === true ||
+    (readiness !== null &&
+      readiness.issues?.some((i) => i.toLowerCase().includes("cannot connect")));
+  const isReady = !isUnreachable && (readiness?.ready ?? false);
   const nebiusInfo = readiness?.nebius;
-  const hasNebiusResult = nebiusInfo !== undefined && nebiusInfo !== null;
+  const hasNebiusResult = !isInitialLoad && !isUnreachable && nebiusInfo !== undefined && nebiusInfo !== null;
   const dockerInfo = readiness?.docker;
-  const hasDockerResult = dockerInfo !== undefined && dockerInfo !== null;
+  const hasDockerResult = !isInitialLoad && !isUnreachable && dockerInfo !== undefined && dockerInfo !== null;
   const isDockerUp = dockerInfo?.available === true;
 
   const modelDisplay = formatModelName(nebiusInfo?.model);
@@ -68,20 +72,34 @@ export function Navbar({
           {/* Target Model Badge */}
           <div
             className="hidden lg:flex items-center gap-2 rounded-lg bg-slate-900/90 px-2.5 py-1.5 text-xs text-slate-300 ring-1 ring-slate-800"
-            title={hasNebiusResult ? `Nebius Model: ${modelDisplay}` : "Detecting Nebius Model…"}
+            title={
+              isUnreachable
+                ? "Backend unreachable • Model detection paused"
+                : hasNebiusResult
+                ? `Nebius Model: ${modelDisplay}`
+                : "Detecting Nebius Model…"
+            }
           >
             <Cpu className="h-3.5 w-3.5 text-indigo-400" />
             <span className="font-mono text-[11px] text-slate-400">Model:</span>
-            <span className="font-mono text-[11px] text-indigo-300 font-medium truncate max-w-[240px]">
-              {hasNebiusResult ? modelDisplay : "Checking…"}
-            </span>
+            {isInitialLoad ? (
+              <span className="h-3.5 w-24 rounded bg-slate-800 animate-pulse" />
+            ) : isUnreachable ? (
+              <span className="font-mono text-[11px] text-rose-400 font-medium">Offline</span>
+            ) : (
+              <span className="font-mono text-[11px] text-indigo-300 font-medium truncate max-w-[240px]">
+                {modelDisplay}
+              </span>
+            )}
           </div>
 
           {/* Docker / Sandbox Status Badge */}
           <div
             className="hidden md:flex items-center gap-1.5 rounded-lg bg-slate-900/90 px-2.5 py-1.5 text-xs text-slate-300 ring-1 ring-slate-800"
             title={
-              !hasDockerResult
+              isUnreachable
+                ? "Backend unreachable • Container check paused"
+                : !hasDockerResult
                 ? "Checking sandbox environment…"
                 : isDockerUp
                 ? `Docker Live: ${dockerInfo?.server_version || "Active"}`
@@ -89,13 +107,15 @@ export function Navbar({
             }
           >
             <Server className="h-3.5 w-3.5 text-cyan-400" />
-            <span className="font-mono text-[11px]">
-              {!hasDockerResult
-                ? "Checking sandbox…"
-                : isDockerUp
-                ? "Docker Live"
-                : "Sandbox: file-check mode"}
-            </span>
+            {isInitialLoad ? (
+              <span className="h-3.5 w-28 rounded bg-slate-800 animate-pulse" />
+            ) : isUnreachable ? (
+              <span className="font-mono text-[11px] text-rose-400 font-medium">Disconnected</span>
+            ) : (
+              <span className="font-mono text-[11px]">
+                {isDockerUp ? "Docker Live" : "Sandbox: file-check mode"}
+              </span>
+            )}
           </div>
 
           {/* Backend Readiness Indicator */}
@@ -103,6 +123,8 @@ export function Navbar({
             className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-mono font-medium ring-1 ${
               isInitialLoad
                 ? "bg-slate-900/90 text-slate-300 ring-slate-800"
+                : isUnreachable
+                ? "bg-rose-950/40 text-rose-300 ring-rose-800/60"
                 : isReady
                 ? "bg-emerald-950/40 text-emerald-300 ring-emerald-800/60"
                 : "bg-amber-950/40 text-amber-300 ring-amber-800/60"
@@ -110,13 +132,20 @@ export function Navbar({
             title={
               isInitialLoad
                 ? "Verifying backend and sandbox readiness..."
+                : isUnreachable
+                ? "Backend unreachable. Ensure uvicorn server is running on port 8000."
                 : readiness?.issues?.join("; ") || "Backend & Nebius Token Factory Ready"
             }
           >
             {isInitialLoad ? (
               <>
                 <span className="h-2 w-2 rounded-full bg-cyan-400 shadow-sm shadow-cyan-400 animate-pulse" />
-                <span className="text-[11px]">Checking…</span>
+                <span className="h-3.5 w-16 rounded bg-slate-800 animate-pulse" />
+              </>
+            ) : isUnreachable ? (
+              <>
+                <AlertTriangle className="h-3.5 w-3.5 text-rose-400" />
+                <span className="text-[11px]">Backend Unreachable</span>
               </>
             ) : isReady ? (
               <>

@@ -11,11 +11,11 @@ Verifies:
 8. Controlled retries and explicit timeouts.
 """
 
-import asyncio
 import json
 from pathlib import Path
-import pytest
+
 import httpx
+import pytest
 
 from backend.app.agent.engine import (
     DiagnosticBudget,
@@ -24,20 +24,11 @@ from backend.app.agent.engine import (
     InvestigationState,
 )
 from backend.app.core.models import (
-    DiagnoseRequest,
     EvidenceItem,
     EvidenceType,
-    Hypothesis,
-    HypothesisCategory,
 )
 from backend.app.llm.cache import SafeDeterministicCache, llm_cache
 from backend.app.llm.client import NebiusLLMClient
-from backend.app.llm.exceptions import (
-    NebiusBillingError,
-    NebiusQuotaError,
-    NebiusServiceError,
-    NebiusTimeoutError,
-)
 from backend.app.llm.trimmer import EvidenceTrimmer
 
 
@@ -97,17 +88,17 @@ class TestEvidenceTrimmer:
     """Verifies evidence compression, log filtering, and bounded context ceilings."""
 
     def test_trim_noisy_logs(self):
-        noisy_logs = "\n".join([
-            "[INFO] 2026-10-26 10:00:00 Healthcheck ping healthy 200 OK",
-            "[INFO] 2026-10-26 10:00:01 Healthcheck ping healthy 200 OK",
-            "[INFO] 2026-10-26 10:00:02 Healthcheck ping healthy 200 OK",
-            "[CRITICAL] 2026-10-26 10:00:03 Unhandled KeyError: 'DATABASE_URL'",
-            "Traceback (most recent call last):",
-            "  File 'main.py', line 12, in <module>",
-            "    db_url = os.environ['DATABASE_URL']",
-            "[INFO] 2026-10-26 10:00:04 Polling heartbeat ok",
-            "[FATAL] Container terminated with exit code 1",
-        ])
+        noisy_logs = (
+            "[INFO] 2026-10-26 10:00:00 Healthcheck ping healthy 200 OK\n"
+            "[INFO] 2026-10-26 10:00:01 Healthcheck ping healthy 200 OK\n"
+            "[INFO] 2026-10-26 10:00:02 Healthcheck ping healthy 200 OK\n"
+            "[CRITICAL] 2026-10-26 10:00:03 Unhandled KeyError: 'DATABASE_URL'\n"
+            "Traceback (most recent call last):\n"
+            "  File 'main.py', line 12, in <module>\n"
+            "    db_url = os.environ['DATABASE_URL']\n"
+            "[INFO] 2026-10-26 10:00:04 Polling heartbeat ok\n"
+            "[FATAL] Container terminated with exit code 1"
+        )
         trimmed = EvidenceTrimmer.trim_logs(noisy_logs, max_lines=6, max_chars=500)
         assert "KeyError: 'DATABASE_URL'" in trimmed
         assert "Traceback" in trimmed
@@ -136,15 +127,27 @@ class TestEvidenceTrimmer:
                     "Status": "unhealthy",
                     "FailingStreak": 5,
                     "Log": [
-                        {"Start": "2026-10-26T10:01:00Z", "End": "2026-10-26T10:01:01Z", "ExitCode": 1, "Output": "curl: (22) The requested URL returned error: 404"},
-                        {"Start": "2026-10-26T10:01:05Z", "End": "2026-10-26T10:01:06Z", "ExitCode": 1, "Output": "curl: (22) The requested URL returned error: 404"},
-                    ]
-                }
+                        {
+                            "Start": "2026-10-26T10:01:00Z",
+                            "End": "2026-10-26T10:01:01Z",
+                            "ExitCode": 1,
+                            "Output": "curl: (22) The requested URL returned error: 404",
+                        },
+                        {
+                            "Start": "2026-10-26T10:01:05Z",
+                            "End": "2026-10-26T10:01:06Z",
+                            "ExitCode": 1,
+                            "Output": "curl: (22) The requested URL returned error: 404",
+                        },
+                    ],
+                },
             },
             "HostConfig": {
                 "Binds": ["/var/run/docker.sock:/var/run/docker.sock"],
                 "NetworkMode": "bridge",
-                "PortBindings": {"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}]},
+                "PortBindings": {
+                    "8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}]
+                },
                 "RestartPolicy": {"Name": "always", "MaximumRetryCount": 0},
                 "LogConfig": {"Type": "json-file", "Config": {}},
             },
@@ -153,14 +156,19 @@ class TestEvidenceTrimmer:
                 "Domainname": "",
                 "User": "",
                 "AttachStdin": False,
-                "Env": ["PATH=/usr/local/bin", "PYTHONUNBUFFERED=1", "SECRET_KEY=supersecret12345", "PORT=8000"],
+                "Env": [
+                    "PATH=/usr/local/bin",
+                    "PYTHONUNBUFFERED=1",
+                    "SECRET_KEY=supersecret12345",
+                    "PORT=8000",
+                ],
                 "Cmd": ["uvicorn", "main:app"],
             },
             "NetworkSettings": {
                 "Bridge": "",
                 "SandboxID": "sand12345",
                 "Ports": {"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}]},
-            }
+            },
         }
         raw_json_str = json.dumps(raw_inspect)
         trimmed = EvidenceTrimmer.trim_docker_inspect(raw_inspect)
@@ -182,9 +190,30 @@ class TestEvidenceTrimmer:
 
     def test_trim_and_bound_evidence(self):
         items = [
-            EvidenceItem(id="ev-1", type=EvidenceType.LOGS, content="A" * 2000, source="app.log", collector="LogCollector", provenance_type="RUNTIME_OBSERVATION"),
-            EvidenceItem(id="ev-2", type=EvidenceType.DIAGNOSTIC_OUTPUT, content="HTTP GET /healthz 200 OK", source="probe_http", collector="ProbeRunner", provenance_type="ACTIVE_PROBE"),
-            EvidenceItem(id="ev-3", type=EvidenceType.SOURCE_CODE, content="def heavy_code(): " + "pass\n" * 500, source="main.py", collector="SourceCollector", provenance_type="STATIC_FILE"),
+            EvidenceItem(
+                id="ev-1",
+                type=EvidenceType.LOGS,
+                content="A" * 2000,
+                source="app.log",
+                collector="LogCollector",
+                provenance_type="RUNTIME_OBSERVATION",
+            ),
+            EvidenceItem(
+                id="ev-2",
+                type=EvidenceType.DIAGNOSTIC_OUTPUT,
+                content="HTTP GET /healthz 200 OK",
+                source="probe_http",
+                collector="ProbeRunner",
+                provenance_type="ACTIVE_PROBE",
+            ),
+            EvidenceItem(
+                id="ev-3",
+                type=EvidenceType.SOURCE_CODE,
+                content="def heavy_code(): " + "pass\n" * 500,
+                source="main.py",
+                collector="SourceCollector",
+                provenance_type="STATIC_FILE",
+            ),
         ]
         bounded = EvidenceTrimmer.trim_and_bound_evidence(items, max_total_chars=1200)
         assert len(bounded) <= 1300
@@ -208,9 +237,15 @@ class TestTokenBudgetAndRedundantInference:
     @pytest.mark.asyncio
     async def test_redundant_inference_avoided_via_safe_cache(self, tmp_path: Path):
         """Repeated investigations with identical evidence hit safe cache, avoiding redundant inference calls."""
-        (tmp_path / "main.py").write_text("import os\nDATABASE_URL = os.environ['DATABASE_URL']\n")
-        (tmp_path / "docker-compose.yml").write_text("services:\n  web:\n    build: .\n")
-        (tmp_path / "logs.txt").write_text("[CRITICAL] KeyError: 'DATABASE_URL'\nContainer exited with code 1\n")
+        (tmp_path / "main.py").write_text(
+            "import os\nDATABASE_URL = os.environ['DATABASE_URL']\n"
+        )
+        (tmp_path / "docker-compose.yml").write_text(
+            "services:\n  web:\n    build: .\n"
+        )
+        (tmp_path / "logs.txt").write_text(
+            "[CRITICAL] KeyError: 'DATABASE_URL'\nContainer exited with code 1\n"
+        )
 
         llm_cache.clear()
         engine = DiagnosticEngine()
@@ -236,11 +271,15 @@ class TestTokenBudgetAndRedundantInference:
 
         starved_budget = DiagnosticBudget(max_tokens=0)
         engine = DiagnosticEngine()
-        result = await engine.run_investigation(project_root=tmp_path, budget=starved_budget)
+        result = await engine.run_investigation(
+            project_root=tmp_path, budget=starved_budget
+        )
 
         budget_events = [
-            e for e in result.audit_log.events
-            if e.event_type == InvestigationEventType.BUDGET_CONSUMED and e.payload.get("limit_type") == "token_budget"
+            e
+            for e in result.audit_log.events
+            if e.event_type == InvestigationEventType.BUDGET_CONSUMED
+            and e.payload.get("limit_type") == "token_budget"
         ]
         assert len(budget_events) == 1
         # Investigation does not crash, proceeds through the state machine
@@ -261,13 +300,17 @@ class TestStructuredOutputsAndResilience:
             return httpx.Response(
                 200,
                 json={
-                    "choices": [{
-                        "message": {
-                            "role": "assistant",
-                            "content": json.dumps({"status": "diagnosis_available", "summary": "ok"})
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": json.dumps(
+                                    {"status": "diagnosis_available", "summary": "ok"}
+                                ),
+                            }
                         }
-                    }]
-                }
+                    ]
+                },
             )
 
         transport = httpx.MockTransport(handler)
@@ -276,7 +319,9 @@ class TestStructuredOutputsAndResilience:
         client.api_key = "test-key"
 
         resp = await client._call_chat_completion("System prompt", "User prompt")
-        assert captured_request["body"].get("response_format") == {"type": "json_object"}
+        assert captured_request["body"].get("response_format") == {
+            "type": "json_object"
+        }
         assert captured_request["body"].get("max_tokens") == 1024
         assert "ok" in resp
 
@@ -287,7 +332,9 @@ class TestStructuredOutputsAndResilience:
         (tmp_path / "logs.txt").write_text("System active\n")
 
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(429, json={"error": "Rate limit exceeded. Token quota reached."})
+            return httpx.Response(
+                429, json={"error": "Rate limit exceeded. Token quota reached."}
+            )
 
         transport = httpx.MockTransport(handler)
         client = NebiusLLMClient(transport=transport)
@@ -300,8 +347,10 @@ class TestStructuredOutputsAndResilience:
 
         # Audit log records QUOTA_EXHAUSTED event
         quota_events = [
-            e for e in result.audit_log.events
-            if e.event_type == InvestigationEventType.MODEL_ERROR and e.payload.get("error_type") == "QUOTA_EXHAUSTED"
+            e
+            for e in result.audit_log.events
+            if e.event_type == InvestigationEventType.MODEL_ERROR
+            and e.payload.get("error_type") == "QUOTA_EXHAUSTED"
         ]
         assert len(quota_events) == 1
         assert result.current_state == InvestigationState.CONCLUDED
@@ -319,13 +368,15 @@ class TestStructuredOutputsAndResilience:
             return httpx.Response(
                 200,
                 json={
-                    "choices": [{
-                        "message": {
-                            "role": "assistant",
-                            "content": json.dumps({"status": "recovered"})
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": json.dumps({"status": "recovered"}),
+                            }
                         }
-                    }]
-                }
+                    ]
+                },
             )
 
         transport = httpx.MockTransport(handler)

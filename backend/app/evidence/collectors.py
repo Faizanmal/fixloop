@@ -13,33 +13,35 @@ Enforces strict boundary validation: never inspects arbitrary filesystem paths.
 
 import hashlib
 import json
-import os
+import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 import yaml
+
 from backend.app.core.models import (
     EvidenceItem,
     EvidenceType,
-    utc_now,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def compute_fingerprint(content: str) -> str:
     """Computes a deterministic SHA256 hex digest snippet for evidence provenance."""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
+
 # Common sensitive variable names that must always have their values masked
 SENSITIVE_KEY_PATTERNS = re.compile(
     r"(KEY|SECRET|TOKEN|PASS|AUTH|PWD|CREDENTIAL|PRIVATE|CERT|SIG|DATABASE_URL|DB_URL|DSN|CONN|URI)",
-    re.IGNORECASE
+    re.IGNORECASE,
 )
 
 
 class SecurityBoundaryError(Exception):
     """Raised when an attempt is made to inspect an unauthorized filesystem path."""
-    pass
 
 
 class ApprovedPathValidator:
@@ -53,7 +55,9 @@ class ApprovedPathValidator:
         and alternate data streams.
         """
         if not relative_file or not isinstance(relative_file, str):
-            raise SecurityBoundaryError("Relative file path must be a non-empty string.")
+            raise SecurityBoundaryError(
+                "Relative file path must be a non-empty string."
+            )
 
         # Disallow null bytes
         if "\0" in relative_file:
@@ -65,11 +69,15 @@ class ApprovedPathValidator:
 
         # Disallow Windows drive specifiers (e.g. C:) and alternate data streams (file:stream)
         if ":" in norm_str:
-            raise SecurityBoundaryError(f"Drive letter or stream specifier forbidden in path: '{relative_file}'")
+            raise SecurityBoundaryError(
+                f"Drive letter or stream specifier forbidden in path: '{relative_file}'"
+            )
 
         # Disallow directory traversal and leading root slashes
         if ".." in norm_str or norm_str.startswith(("/", "\\")):
-            raise SecurityBoundaryError(f"Directory traversal or absolute path detected: '{relative_file}'")
+            raise SecurityBoundaryError(
+                f"Directory traversal or absolute path detected: '{relative_file}'"
+            )
 
         # Explicitly verify with Path object
         p_obj = Path(norm_str)
@@ -78,7 +86,9 @@ class ApprovedPathValidator:
 
         for part in p_obj.parts:
             if part in ("..", "/", "\\") or ":" in part:
-                raise SecurityBoundaryError(f"Invalid path component '{part}' in '{relative_file}'")
+                raise SecurityBoundaryError(
+                    f"Invalid path component '{part}' in '{relative_file}'"
+                )
 
         root_resolved = root_path.resolve()
         target_resolved = (root_resolved / p_obj).resolve()
@@ -97,20 +107,29 @@ class LogCollector:
     """Collects and normalizes application logs."""
 
     @staticmethod
-    def collect_from_text(logs_text: str, source_label: str = "logs.user") -> List[EvidenceItem]:
+    def collect_from_text(
+        logs_text: str, source_label: str = "logs.user"
+    ) -> list[EvidenceItem]:
         """Normalizes raw logs text into labeled EvidenceItems."""
         if not logs_text or not logs_text.strip():
             return []
 
         lines = [line.strip() for line in logs_text.splitlines() if line.strip()]
-        error_lines = [l for l in lines if any(k in l.upper() for k in ["ERROR", "CRITICAL", "EXCEPTION", "TRACEBACK", "FAIL"])]
+        error_lines = [
+            l
+            for l in lines
+            if any(
+                k in l.upper()
+                for k in ["ERROR", "CRITICAL", "EXCEPTION", "TRACEBACK", "FAIL"]
+            )
+        ]
 
         items = []
         tail_content = "\n".join(lines[-50:])
         # Item 1: Complete log tail
         items.append(
             EvidenceItem(
-                id=f"ev-log-tail",
+                id="ev-log-tail",
                 type=EvidenceType.LOGS,
                 source=source_label,
                 content=tail_content,
@@ -128,7 +147,7 @@ class LogCollector:
             err_content = "\n".join(error_lines[:15])
             items.append(
                 EvidenceItem(
-                    id=f"ev-log-errors",
+                    id="ev-log-errors",
                     type=EvidenceType.LOGS,
                     source=f"{source_label}:extracted_errors",
                     content=err_content,
@@ -148,7 +167,9 @@ class DockerStateCollector:
     """Extracts container status, exit codes, healthchecks, and port bindings."""
 
     @classmethod
-    def collect_from_json(cls, json_text: str, source_label: str = "docker.inspect") -> List[EvidenceItem]:
+    def collect_from_json(
+        cls, json_text: str, source_label: str = "docker.inspect"
+    ) -> list[EvidenceItem]:
         """Parses docker inspect JSON string and extracts EvidenceItems."""
         if not json_text or not json_text.strip():
             return []
@@ -160,7 +181,9 @@ class DockerStateCollector:
             return []
 
     @staticmethod
-    def collect_from_dict(inspect_data: Any, source_label: str = "docker.inspect") -> List[EvidenceItem]:
+    def collect_from_dict(
+        inspect_data: Any, source_label: str = "docker.inspect"
+    ) -> list[EvidenceItem]:
         if not inspect_data:
             return []
 
@@ -172,7 +195,6 @@ class DockerStateCollector:
 
         items = []
         state = inspect_data.get("State", {})
-        config = inspect_data.get("Config", {})
         network_settings = inspect_data.get("NetworkSettings", {})
 
         # Health state
@@ -231,7 +253,9 @@ class ComposeConfigCollector:
     """Collects and parses docker-compose.yml configuration."""
 
     @staticmethod
-    def collect_from_yaml(compose_text: str, source_label: str = "compose.config") -> List[EvidenceItem]:
+    def collect_from_yaml(
+        compose_text: str, source_label: str = "compose.config"
+    ) -> list[EvidenceItem]:
         if not compose_text or not compose_text.strip():
             return []
 
@@ -300,21 +324,28 @@ class SourceCodeCollector:
     """Extracts endpoint routes and listen ports from application source files."""
 
     @staticmethod
-    def collect_routes_and_ports(files: Dict[str, str], source_label: str = "source.code") -> List[EvidenceItem]:
+    def collect_routes_and_ports(
+        files: dict[str, str], source_label: str = "source.code"
+    ) -> list[EvidenceItem]:
         items = []
         for filename, content in files.items():
             discovered_routes = []
             discovered_ports = []
 
             # Match FastAPI / Flask routes
-            route_matches = re.findall(r"@(?:app|router)\.(?:get|post|put|delete)\([\"']([^\"']+)[\"']", content)
+            route_matches = re.findall(
+                r"@(?:app|router)\.(?:get|post|put|delete)\([\"']([^\"']+)[\"']",
+                content,
+            )
             if route_matches:
                 discovered_routes.extend(list(dict.fromkeys(route_matches)))
 
             # Match common port bindings (e.g. port=8000, PORT = 8000, "8000")
             port_matches = re.findall(r"(?:port\s*=\s*|PORT\s*=\s*)(\d{2,5})", content)
             if port_matches:
-                discovered_ports.extend(list(dict.fromkeys([int(p) for p in port_matches])))
+                discovered_ports.extend(
+                    list(dict.fromkeys([int(p) for p in port_matches]))
+                )
 
             if discovered_routes or discovered_ports:
                 meta = {
@@ -346,10 +377,10 @@ class EnvironmentCollector:
 
     @staticmethod
     def collect_presence(
-        env_dict: Dict[str, str],
-        expected_keys: Optional[Set[str]] = None,
-        source_label: str = "env.audit"
-    ) -> List[EvidenceItem]:
+        env_dict: dict[str, str],
+        expected_keys: set[str] | None = None,
+        source_label: str = "env.audit",
+    ) -> list[EvidenceItem]:
         expected = expected_keys or set()
         present_keys = set(env_dict.keys())
 
@@ -358,7 +389,11 @@ class EnvironmentCollector:
             # Mask embedded credentials in URLs (e.g. postgres://user:password@host:port/db)
             sanitized = re.sub(r"://([^:@\s]+):([^@\s]+)@", r"://\1:***@", str_val)
             # Mask bearer tokens or private key material
-            if re.search(r"(bearer\s+[a-zA-Z0-9_\-\.]+|BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY)", sanitized, re.IGNORECASE):
+            if re.search(
+                r"(bearer\s+[a-zA-Z0-9_\-\.]+|BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY)",
+                sanitized,
+                re.IGNORECASE,
+            ):
                 return "[PRESENT_SECRET_MASKED]"
             return sanitized[:20]
 
@@ -404,15 +439,17 @@ class EvidenceCollectorHub:
     def __init__(self, project_root: Path):
         self.project_root = project_root.resolve()
         if not self.project_root.exists() or not self.project_root.is_dir():
-            raise SecurityBoundaryError(f"Approved project root directory does not exist: '{project_root}'")
+            raise SecurityBoundaryError(
+                f"Approved project root directory does not exist: '{project_root}'"
+            )
 
     def collect_all_initial(
         self,
-        logs_override: Optional[str] = None,
-        inspect_override: Optional[Dict[str, Any]] = None,
-    ) -> List[EvidenceItem]:
+        logs_override: str | None = None,
+        inspect_override: dict[str, Any] | None = None,
+    ) -> list[EvidenceItem]:
         """Collects initial evidence from repository files and provided runtime metadata."""
-        evidence: List[EvidenceItem] = []
+        evidence: list[EvidenceItem] = []
 
         # 1. Logs
         logs_text = logs_override
@@ -422,7 +459,11 @@ class EvidenceCollectorHub:
                 logs_text = log_file.read_text(encoding="utf-8", errors="replace")
 
         if logs_text:
-            evidence.extend(LogCollector.collect_from_text(logs_text, source_label=f"project:{self.project_root.name}:logs"))
+            evidence.extend(
+                LogCollector.collect_from_text(
+                    logs_text, source_label=f"project:{self.project_root.name}:logs"
+                )
+            )
 
         # 2. Docker Inspect
         inspect_data = inspect_override
@@ -435,14 +476,21 @@ class EvidenceCollectorHub:
                     inspect_data = None
 
         if inspect_data:
-            evidence.extend(DockerStateCollector.collect_from_dict(inspect_data, source_label=f"docker:inspect:{self.project_root.name}"))
+            evidence.extend(
+                DockerStateCollector.collect_from_dict(
+                    inspect_data,
+                    source_label=f"docker:inspect:{self.project_root.name}",
+                )
+            )
 
         # 3. Docker Compose
         compose_file = self.project_root / "docker-compose.yml"
         declared_keys = set()
         if compose_file.exists():
             compose_text = compose_file.read_text(encoding="utf-8", errors="replace")
-            compose_items = ComposeConfigCollector.collect_from_yaml(compose_text, source_label=f"compose:{compose_file.name}")
+            compose_items = ComposeConfigCollector.collect_from_yaml(
+                compose_text, source_label=f"compose:{compose_file.name}"
+            )
             evidence.extend(compose_items)
             for item in compose_items:
                 declared_keys.update(item.metadata.get("declared_env_keys", []))
@@ -452,21 +500,37 @@ class EvidenceCollectorHub:
         for ext in [".py", ".js", ".ts"]:
             for p in self.project_root.glob(f"*{ext}"):
                 if p.is_file():
-                    source_files[p.name] = p.read_text(encoding="utf-8", errors="replace")
+                    source_files[p.name] = p.read_text(
+                        encoding="utf-8", errors="replace"
+                    )
 
         if source_files:
-            evidence.extend(SourceCodeCollector.collect_routes_and_ports(source_files, source_label=f"source:{self.project_root.name}"))
+            evidence.extend(
+                SourceCodeCollector.collect_routes_and_ports(
+                    source_files, source_label=f"source:{self.project_root.name}"
+                )
+            )
 
         # 5. Environment variable audit
         # Extract environment from inspect if available
         env_dict = {}
-        target_inspect = inspect_data[0] if (isinstance(inspect_data, list) and inspect_data) else (inspect_data if isinstance(inspect_data, dict) else {})
-        if target_inspect and "Config" in target_inspect and "Env" in target_inspect["Config"]:
+        target_inspect = (
+            inspect_data[0]
+            if (isinstance(inspect_data, list) and inspect_data)
+            else (inspect_data if isinstance(inspect_data, dict) else {})
+        )
+        if (
+            target_inspect
+            and "Config" in target_inspect
+            and "Env" in target_inspect["Config"]
+        ):
             for e in target_inspect["Config"]["Env"]:
                 if "=" in e:
                     k, v = e.split("=", 1)
                     env_dict[k] = v
 
-        evidence.extend(EnvironmentCollector.collect_presence(env_dict, expected_keys=declared_keys))
+        evidence.extend(
+            EnvironmentCollector.collect_presence(env_dict, expected_keys=declared_keys)
+        )
 
         return evidence

@@ -6,30 +6,31 @@ against deterministic benchmark scenarios, computing empirical metrics.
 
 import time
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any
 
 from backend.app.agent.engine import DiagnosticEngine
-from backend.app.core.models import DiagnosisStatus, VerificationStatus
 from backend.app.agent.patcher import (
     ControlledPatchGenerator,
     InsufficientEvidenceError,
     PatchProposal,
-    PatchValidator,
 )
+from backend.app.core.models import DiagnosisStatus, VerificationStatus
+from backend.app.eval.models import ScenarioEvaluationRecord
+from backend.app.llm.trimmer import EvidenceTrimmer
 from backend.app.sandbox.verifier import (
     ControlledVerificationPipeline,
     DisposableSandbox,
     VerificationReport,
 )
-from backend.app.eval.models import ScenarioEvaluationRecord
-from backend.app.llm.trimmer import EvidenceTrimmer
 
 
 class FixLoopEvaluator:
     """Evaluates FixLoop's full diagnostic loop and verification pipeline on benchmark scenarios."""
 
     @staticmethod
-    async def evaluate_scenario(scenario_dir: Path, manifest: Dict[str, Any]) -> ScenarioEvaluationRecord:
+    async def evaluate_scenario(
+        scenario_dir: Path, manifest: dict[str, Any]
+    ) -> ScenarioEvaluationRecord:
         start_time = time.perf_counter()
         scenario_id = manifest["scenario_id"]
         scenario_name = manifest["name"]
@@ -41,7 +42,8 @@ class FixLoopEvaluator:
 
         tests_required = len(diag_result.audit_log.test_results)
         unnecessary_tests = sum(
-            1 for t in diag_result.audit_log.selected_tests
+            1
+            for t in diag_result.audit_log.selected_tests
             if getattr(t, "expected_information_gain", 0.0) <= 0.0
         )
         top_hypothesis = diag_result.hypotheses[0] if diag_result.hypotheses else None
@@ -66,13 +68,16 @@ class FixLoopEvaluator:
         elif "configuration regression" in desc or "rate_limit_burst" in desc:
             identified_root_cause = "REGRESSION_DETECTED"
 
-        root_cause_accuracy = (identified_root_cause == expected_root_cause)
+        root_cause_accuracy = identified_root_cause == expected_root_cause
 
         # Category mapping
         category = "supported"
         if scenario_id == "scenario_d_insufficient_evidence":
             category = "insufficient_evidence"
-        elif scenario_id in ("scenario_b_healthcheck_mismatch", "scenario_e_misleading_logs"):
+        elif scenario_id in (
+            "scenario_b_healthcheck_mismatch",
+            "scenario_e_misleading_logs",
+        ):
             category = "misleading_logs"
         elif scenario_id == "scenario_f_contradictory_evidence":
             category = "contradictory_evidence"
@@ -82,20 +87,26 @@ class FixLoopEvaluator:
         # Check Insufficient Evidence handling
         correct_insufficient_evidence = False
         if category == "insufficient_evidence":
-            correct_insufficient_evidence = (
-                diag_result.status in (DiagnosisStatus.INSUFFICIENT_EVIDENCE, DiagnosisStatus.HUMAN_INTERVENTION_REQUIRED)
-                or (top_hypothesis is not None and top_hypothesis.confidence < 0.90)
-            )
+            correct_insufficient_evidence = diag_result.status in (
+                DiagnosisStatus.INSUFFICIENT_EVIDENCE,
+                DiagnosisStatus.HUMAN_INTERVENTION_REQUIRED,
+            ) or (top_hypothesis is not None and top_hypothesis.confidence < 0.90)
 
         # 2. Patch Synthesis and Sandboxed Verification
         patch_generated = False
         patch_applied_cleanly = False
         actual_verification_success = False
-        false_claims_of_success = False  # By invariant, FixLoop never falsely claims success
+        false_claims_of_success = (
+            False  # By invariant, FixLoop never falsely claims success
+        )
         failures_and_retries = 0
 
         # Attempt patch synthesis only if diagnosis is available and confident
-        if diag_result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE and top_hypothesis and top_hypothesis.confidence >= 0.90:
+        if (
+            diag_result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
+            and top_hypothesis
+            and top_hypothesis.confidence >= 0.90
+        ):
             try:
                 # For Scenario G (Regression test), test handling of a regressive/buggy patch
                 if scenario_id == "scenario_g_failed_patch_regression":
@@ -105,7 +116,7 @@ class FixLoopEvaluator:
                         "--- a/main.py\n"
                         "+++ b/main.py\n"
                         "@@ -1,5 +1,5 @@\n"
-                        "-RATE_LIMIT_BURST = \"unparsed_string\"\n"
+                        '-RATE_LIMIT_BURST = "unparsed_string"\n'
                         "+RATE_LIMIT_BURST = def invalid_syntax(\n"
                         " if not isinstance(RATE_LIMIT_BURST, int):\n"
                     )
@@ -121,7 +132,9 @@ class FixLoopEvaluator:
                     with DisposableSandbox(scenario_dir) as sandbox:
                         apply_ok, _ = sandbox.apply_patch(proposal)
                         patch_applied_cleanly = apply_ok
-                        exec_res = sandbox.run_verification_procedure(proposal.verification_procedure)
+                        exec_res = sandbox.run_verification_procedure(
+                            proposal.verification_procedure
+                        )
                         # Verification MUST fail (exit code 1)
                         actual_verification_success = exec_res.passed
                         failures_and_retries += 1
@@ -137,14 +150,22 @@ class FixLoopEvaluator:
                     patch_generated = True
 
                     # Verify in sandbox
-                    report: VerificationReport = await ControlledVerificationPipeline.verify_hypothesis_fix(
-                        project_root=scenario_dir,
-                        diagnosis_status=diag_result.status,
-                        hypothesis=top_hypothesis,
+                    report: VerificationReport = (
+                        await ControlledVerificationPipeline.verify_hypothesis_fix(
+                            project_root=scenario_dir,
+                            diagnosis_status=diag_result.status,
+                            hypothesis=top_hypothesis,
+                        )
                     )
-                    patch_applied_cleanly = (report.status != VerificationStatus.PATCH_REJECTED)
-                    actual_verification_success = (report.status == VerificationStatus.VERIFIED_FIXED)
-                    failures_and_retries = report.attempts - 1 if report.attempts > 1 else 0
+                    patch_applied_cleanly = (
+                        report.status != VerificationStatus.PATCH_REJECTED
+                    )
+                    actual_verification_success = (
+                        report.status == VerificationStatus.VERIFIED_FIXED
+                    )
+                    failures_and_retries = (
+                        report.attempts - 1 if report.attempts > 1 else 0
+                    )
 
             except InsufficientEvidenceError:
                 # Honestly refused to generate patch for inadequate or non-actionable causes
@@ -170,9 +191,14 @@ class FixLoopEvaluator:
                 completion_tokens = 0
                 total_tokens = 0
             else:
-                trimmed_evidence_text = EvidenceTrimmer.trim_and_bound_evidence(diag_result.evidence, max_total_chars=2200)
+                trimmed_evidence_text = EvidenceTrimmer.trim_and_bound_evidence(
+                    diag_result.evidence, max_total_chars=2200
+                )
                 prompt_tokens = max(1, (len(trimmed_evidence_text) + 300) // 4)
-                completion_tokens = max(1, (len(diag_result.summary) + len(str(diag_result.hypotheses))) // 4)
+                completion_tokens = max(
+                    1,
+                    (len(diag_result.summary) + len(str(diag_result.hypotheses))) // 4,
+                )
                 total_tokens = prompt_tokens + completion_tokens
 
         # $0.35 per 1,000,000 tokens

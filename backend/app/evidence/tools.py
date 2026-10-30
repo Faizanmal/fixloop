@@ -8,34 +8,37 @@ Enforces:
 """
 
 from __future__ import annotations
+
 import asyncio
 import os
 import socket
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from typing import Any
 
 import httpx
-from backend.app.evidence.allowlist import DiagnosticAllowlist
+from pydantic import BaseModel, Field
+
 from backend.app.evidence.collectors import ApprovedPathValidator
 
 
 class DiagnosticToolResult(BaseModel):
     """Auditable record of a single executed diagnostic probe."""
+
     tool_name: str
     target: str
-    parameters: Dict[str, Any] = Field(default_factory=dict)
+    parameters: dict[str, Any] = Field(default_factory=dict)
     success: bool
     output: str
     cost: int
     duration_ms: int
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class BaseDiagnosticTool(ABC):
     """Abstract base class for all registered diagnostic probes."""
+
     tool_name: str
     cost: int
     safety: str  # "safe" or "disruptive"
@@ -47,35 +50,41 @@ class BaseDiagnosticTool(ABC):
     async def execute(
         self,
         target: str,
-        parameters: Dict[str, Any],
+        parameters: dict[str, Any],
         project_root: Path,
-        simulated_context: Optional[Dict[str, Any]] = None,
+        simulated_context: dict[str, Any] | None = None,
     ) -> DiagnosticToolResult:
         """Executes the diagnostic probe within approved safety boundaries."""
-        pass
 
 
 class ToolProbeHTTP(BaseDiagnosticTool):
     """Safely probes an HTTP endpoint to verify status code and response payload."""
+
     tool_name = "probe_http"
     cost = 3
     safety = "safe"
-    description = "Sends an HTTP GET request to check response code, headers, and body snippet."
+    description = (
+        "Sends an HTTP GET request to check response code, headers, and body snippet."
+    )
     estimated_duration_ms = 150
     timeout_seconds = 3.0
 
     async def execute(
         self,
         target: str,
-        parameters: Dict[str, Any],
+        parameters: dict[str, Any],
         project_root: Path,
-        simulated_context: Optional[Dict[str, Any]] = None,
+        simulated_context: dict[str, Any] | None = None,
     ) -> DiagnosticToolResult:
         start_time = time.perf_counter()
         port = parameters.get("port", 8000)
 
         # Normalize URL
-        url = target if target.startswith("http") else f"http://localhost:{port}{target if target.startswith('/') else '/' + target}"
+        url = (
+            target
+            if target.startswith("http")
+            else f"http://localhost:{port}{target if target.startswith('/') else '/' + target}"
+        )
 
         # If simulated context provides endpoint responses (e.g. for offline fixtures)
         if simulated_context and "endpoints" in simulated_context:
@@ -158,6 +167,7 @@ class ToolProbeHTTP(BaseDiagnosticTool):
 
 class ToolProbeTCP(BaseDiagnosticTool):
     """Probes whether a target TCP port is open and accepting socket connections."""
+
     tool_name = "probe_tcp"
     cost = 2
     safety = "safe"
@@ -168,9 +178,9 @@ class ToolProbeTCP(BaseDiagnosticTool):
     async def execute(
         self,
         target: str,
-        parameters: Dict[str, Any],
+        parameters: dict[str, Any],
         project_root: Path,
-        simulated_context: Optional[Dict[str, Any]] = None,
+        simulated_context: dict[str, Any] | None = None,
     ) -> DiagnosticToolResult:
         start_time = time.perf_counter()
         port = parameters.get("port")
@@ -186,11 +196,20 @@ class ToolProbeTCP(BaseDiagnosticTool):
         listening_ports = set()
         if main_py.exists():
             import re
-            m = re.findall(r"(?:port\s*=\s*|PORT\s*=\s*)(\d+)", main_py.read_text(encoding="utf-8", errors="replace"))
+
+            m = re.findall(
+                r"(?:port\s*=\s*|PORT\s*=\s*)(\d+)",
+                main_py.read_text(encoding="utf-8", errors="replace"),
+            )
             listening_ports.update([int(p) for p in m])
         if logs_file.exists():
             import re
-            m = re.findall(r"port\s+(\d+)", logs_file.read_text(encoding="utf-8", errors="replace"), re.IGNORECASE)
+
+            m = re.findall(
+                r"port\s+(\d+)",
+                logs_file.read_text(encoding="utf-8", errors="replace"),
+                re.IGNORECASE,
+            )
             listening_ports.update([int(p) for p in m])
 
         duration_ms = int((time.perf_counter() - start_time) * 1000)
@@ -213,7 +232,7 @@ class ToolProbeTCP(BaseDiagnosticTool):
         try:
             result = sock.connect_ex((host, port))
             sock.close()
-            is_open = (result == 0)
+            is_open = result == 0
             duration_ms = int((time.perf_counter() - start_time) * 1000)
             return DiagnosticToolResult(
                 tool_name=self.tool_name,
@@ -241,19 +260,22 @@ class ToolProbeTCP(BaseDiagnosticTool):
 
 class ToolCheckEnvKey(BaseDiagnosticTool):
     """Verifies whether an environment variable key is defined without leaking secret values."""
+
     tool_name = "check_env_key"
     cost = 1
     safety = "safe"
-    description = "Verifies environment variable presence without disclosing secret values."
+    description = (
+        "Verifies environment variable presence without disclosing secret values."
+    )
     estimated_duration_ms = 20
     timeout_seconds = 1.0
 
     async def execute(
         self,
         target: str,
-        parameters: Dict[str, Any],
+        parameters: dict[str, Any],
         project_root: Path,
-        simulated_context: Optional[Dict[str, Any]] = None,
+        simulated_context: dict[str, Any] | None = None,
     ) -> DiagnosticToolResult:
         start_time = time.perf_counter()
         key_name = parameters.get("key") or target
@@ -263,7 +285,11 @@ class ToolCheckEnvKey(BaseDiagnosticTool):
         compose_has_key = False
         if compose_file.exists():
             content = compose_file.read_text(encoding="utf-8", errors="replace")
-            if f"- {key_name}=" in content or f"{key_name}:" in content or f"- {key_name}\n" in content:
+            if (
+                f"- {key_name}=" in content
+                or f"{key_name}:" in content
+                or f"- {key_name}\n" in content
+            ):
                 compose_has_key = True
 
         # 2. Check in docker_inspect.json
@@ -304,19 +330,22 @@ class ToolCheckEnvKey(BaseDiagnosticTool):
 
 class ToolReadApprovedFile(BaseDiagnosticTool):
     """Safely reads a designated file strictly within the approved repository root."""
+
     tool_name = "read_approved_file"
     cost = 1
     safety = "safe"
-    description = "Reads approved configuration or source file within project boundaries."
+    description = (
+        "Reads approved configuration or source file within project boundaries."
+    )
     estimated_duration_ms = 30
     timeout_seconds = 1.0
 
     async def execute(
         self,
         target: str,
-        parameters: Dict[str, Any],
+        parameters: dict[str, Any],
         project_root: Path,
-        simulated_context: Optional[Dict[str, Any]] = None,
+        simulated_context: dict[str, Any] | None = None,
     ) -> DiagnosticToolResult:
         start_time = time.perf_counter()
         target_path = ApprovedPathValidator.validate_and_resolve(project_root, target)
@@ -352,7 +381,7 @@ class DiagnosticToolRegistry:
     """Central registry enforcing that ONLY registered diagnostic tools can be executed."""
 
     def __init__(self):
-        self._tools: Dict[str, BaseDiagnosticTool] = {
+        self._tools: dict[str, BaseDiagnosticTool] = {
             "probe_http": ToolProbeHTTP(),
             "probe_tcp": ToolProbeTCP(),
             "check_env_key": ToolCheckEnvKey(),
@@ -362,10 +391,10 @@ class DiagnosticToolRegistry:
     def register(self, tool: BaseDiagnosticTool):
         self._tools[tool.tool_name] = tool
 
-    def get_tool(self, tool_name: str) -> Optional[BaseDiagnosticTool]:
+    def get_tool(self, tool_name: str) -> BaseDiagnosticTool | None:
         return self._tools.get(tool_name)
 
-    def list_tools(self) -> List[Dict[str, Any]]:
+    def list_tools(self) -> list[dict[str, Any]]:
         return [
             {
                 "name": t.tool_name,
@@ -380,24 +409,30 @@ class DiagnosticToolRegistry:
         self,
         tool_name: str,
         target: str,
-        parameters: Dict[str, Any],
+        parameters: dict[str, Any],
         project_root: Path,
-        simulated_context: Optional[Dict[str, Any]] = None,
-        timeout_seconds: Optional[float] = None,
+        simulated_context: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
     ) -> DiagnosticToolResult:
         """Validates tool registration and executes with per-tool timeout protection."""
         tool = self._tools.get(tool_name)
         if not tool:
-            raise ValueError(f"Unregistered diagnostic tool '{tool_name}'. Permitted tools: {list(self._tools.keys())}")
+            raise ValueError(
+                f"Unregistered diagnostic tool '{tool_name}'. Permitted tools: {list(self._tools.keys())}"
+            )
 
-        effective_timeout = timeout_seconds if timeout_seconds is not None else getattr(tool, "timeout_seconds", 5.0)
+        effective_timeout = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else getattr(tool, "timeout_seconds", 5.0)
+        )
         start_time = time.perf_counter()
         try:
             return await asyncio.wait_for(
                 tool.execute(target, parameters, project_root, simulated_context),
                 timeout=effective_timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             duration_ms = int((time.perf_counter() - start_time) * 1000)
             return DiagnosticToolResult(
                 tool_name=tool_name,

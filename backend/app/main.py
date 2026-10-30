@@ -2,8 +2,9 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from backend.app.api.routes import router as api_router
 from backend.app.core.config import settings
-from backend.app.api.routes import router as api_router, health, ready
 
 app = FastAPI(
     title="FixLoop API",

@@ -25,14 +25,19 @@ export function ProjectHealthSummary({
   totalDiagnosesCount,
 }: ProjectHealthSummaryProps) {
   const isInitialLoad = readiness === null;
+  const isUnreachable =
+    readiness?.isUnreachable === true ||
+    (readiness !== null &&
+      readiness.issues?.some((i) => i.toLowerCase().includes("cannot connect")));
+
   const dockerInfo = readiness?.docker;
-  const hasDockerResult = dockerInfo !== undefined && dockerInfo !== null;
+  const hasDockerResult = !isInitialLoad && !isUnreachable && dockerInfo !== undefined && dockerInfo !== null;
   const isDockerUp = dockerInfo?.available === true;
 
   const nebiusInfo = readiness?.nebius;
-  const hasNebiusResult = nebiusInfo !== undefined && nebiusInfo !== null;
+  const hasNebiusResult = !isInitialLoad && !isUnreachable && nebiusInfo !== undefined && nebiusInfo !== null;
   const isNebiusConfigured = nebiusInfo?.api_key_configured ?? false;
-  const isMockMode = nebiusInfo?.mock_mode ?? false;
+  const isMockMode = !isUnreachable && (nebiusInfo?.mock_mode ?? false);
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -44,19 +49,24 @@ export function ProjectHealthSummary({
           </span>
           <Server className="h-4 w-4 text-cyan-400" />
         </div>
-        {!hasDockerResult ? (
+        {isInitialLoad ? (
+          <div className="py-1">
+            <div className="h-6 w-32 bg-slate-800/80 rounded animate-pulse" />
+            <div className="h-3 w-44 bg-slate-800/50 rounded animate-pulse mt-2" />
+          </div>
+        ) : isUnreachable ? (
           <>
             <div className="flex items-center gap-2">
               <span className="text-lg font-bold text-white font-mono">
-                Checking sandbox…
+                Disconnected
               </span>
               <span
-                className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse"
-                title="Checking sandbox environment..."
+                className="h-2 w-2 rounded-full bg-rose-500"
+                title="Backend unreachable"
               />
             </div>
-            <p className="mt-1 text-xs text-slate-400 leading-relaxed">
-              Detecting container runtime / isolation mode…
+            <p className="mt-1 text-xs text-rose-400/90 leading-relaxed">
+              Backend unreachable • Container check paused
             </p>
           </>
         ) : (
@@ -87,19 +97,23 @@ export function ProjectHealthSummary({
           </span>
           <Cpu className="h-4 w-4 text-indigo-400" />
         </div>
-        {!hasNebiusResult ? (
+        {isInitialLoad ? (
+          <div className="py-1">
+            <div className="h-6 w-36 bg-slate-800/80 rounded animate-pulse" />
+            <div className="h-3 w-40 bg-slate-800/50 rounded animate-pulse mt-2" />
+          </div>
+        ) : isUnreachable ? (
           <>
             <div className="flex items-center gap-2">
               <span className="text-lg font-bold text-white font-mono truncate">
-                Checking engine…
+                Backend Unreachable
               </span>
-              <span
-                className="h-2 w-2 rounded-full bg-indigo-400 animate-pulse"
-                title="Connecting to Nebius Token Factory..."
-              />
+              <span className="rounded bg-rose-950 px-1.5 py-0.5 text-[9px] font-mono text-rose-300 border border-rose-800">
+                Offline
+              </span>
             </div>
-            <p className="mt-1 text-xs text-slate-400 leading-relaxed truncate">
-              Connecting to Nebius Token Factory…
+            <p className="mt-1 text-xs text-rose-400/90 leading-relaxed truncate">
+              Ensure FastAPI backend is running
             </p>
           </>
         ) : (
@@ -157,23 +171,32 @@ export function ProjectHealthSummary({
           </span>
           <Layers className="h-4 w-4 text-amber-400" />
         </div>
-        <div className="flex items-baseline gap-2 truncate">
-          <span
-            className="text-lg font-bold text-amber-300 font-mono truncate"
-            title={activeScenario ? activeScenario.name : (currentTargetName || "Custom Target")}
-          >
-            {activeScenario
-              ? activeScenario.name.split(":")[0]
-              : currentTargetName
-              ? `Custom: ${currentTargetName}`
-              : "Custom Log Target"}
-          </span>
-        </div>
-        <p className="mt-1 text-xs text-slate-400 leading-relaxed truncate">
-          {activeScenario
-            ? `Difficulty: ${activeScenario.difficulty} • ${totalDiagnosesCount} run(s) logged`
-            : `Custom Input Target • ${totalDiagnosesCount} run(s) logged`}
-        </p>
+        {isInitialLoad ? (
+          <div className="py-1">
+            <div className="h-6 w-28 bg-slate-800/80 rounded animate-pulse" />
+            <div className="h-3 w-36 bg-slate-800/50 rounded animate-pulse mt-2" />
+          </div>
+        ) : (
+          <>
+            <div className="flex items-baseline gap-2 truncate">
+              <span
+                className="text-lg font-bold text-amber-300 font-mono truncate"
+                title={activeScenario ? activeScenario.name : (currentTargetName || "Custom Target")}
+              >
+                {activeScenario
+                  ? activeScenario.name.split(":")[0]
+                  : currentTargetName
+                  ? `Custom: ${currentTargetName}`
+                  : "Custom Log Target"}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-slate-400 leading-relaxed truncate">
+              {activeScenario
+                ? `Difficulty: ${activeScenario.difficulty} • ${totalDiagnosesCount} run(s) logged`
+                : `Custom Input Target • ${totalDiagnosesCount} run(s) logged`}
+            </p>
+          </>
+        )}
       </div>
     </div>
   );

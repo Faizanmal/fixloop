@@ -10,19 +10,15 @@ Usage:
 import asyncio
 import csv
 import json
-import os
-import sys
-import time
 from pathlib import Path
-from typing import List, Tuple
 
+from backend.app.eval.baseline import LogOnlyBaselineRunner
+from backend.app.eval.fixloop_evaluator import FixLoopEvaluator
 from backend.app.eval.models import (
     BenchmarkComparisonReport,
     BenchmarkSummary,
     ScenarioEvaluationRecord,
 )
-from backend.app.eval.baseline import LogOnlyBaselineRunner
-from backend.app.eval.fixloop_evaluator import FixLoopEvaluator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 SCENARIOS_DIR = REPO_ROOT / "scenarios"
@@ -34,7 +30,7 @@ class FixLoopBenchmarkRunner:
     def __init__(self, scenarios_dir: Path = SCENARIOS_DIR):
         self.scenarios_dir = scenarios_dir
 
-    def discover_scenarios(self) -> List[Tuple[Path, dict]]:
+    def discover_scenarios(self) -> list[tuple[Path, dict]]:
         scenarios = []
         for entry in sorted(self.scenarios_dir.iterdir()):
             if entry.is_dir():
@@ -44,11 +40,15 @@ class FixLoopBenchmarkRunner:
                         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
                         scenarios.append((entry, manifest))
                     except Exception as exc:
-                        print(f"Warning: Failed loading manifest from {entry.name}: {exc}")
+                        print(
+                            f"Warning: Failed loading manifest from {entry.name}: {exc}"
+                        )
         return scenarios
 
     @staticmethod
-    def compute_summary(records: List[ScenarioEvaluationRecord], agent_type: str) -> BenchmarkSummary:
+    def compute_summary(
+        records: list[ScenarioEvaluationRecord], agent_type: str
+    ) -> BenchmarkSummary:
         agent_records = [r for r in records if r.agent_type == agent_type]
         total = len(agent_records)
         if total == 0:
@@ -57,9 +57,17 @@ class FixLoopBenchmarkRunner:
         accurate_count = sum(1 for r in agent_records if r.root_cause_accuracy)
         total_probes = sum(r.diagnostic_tests_required for r in agent_records)
         total_unnecessary = sum(r.unnecessary_tests for r in agent_records)
-        insufficient_records = [r for r in agent_records if r.scenario_category == "insufficient_evidence"]
-        insufficient_accurate = sum(1 for r in insufficient_records if r.correct_insufficient_evidence_use)
-        insufficient_rate = (insufficient_accurate / len(insufficient_records)) if insufficient_records else 1.0
+        insufficient_records = [
+            r for r in agent_records if r.scenario_category == "insufficient_evidence"
+        ]
+        insufficient_accurate = sum(
+            1 for r in insufficient_records if r.correct_insufficient_evidence_use
+        )
+        insufficient_rate = (
+            (insufficient_accurate / len(insufficient_records))
+            if insufficient_records
+            else 1.0
+        )
 
         patches_gen = sum(1 for r in agent_records if r.patch_generated)
         clean_patches = sum(1 for r in agent_records if r.patch_applied_cleanly)
@@ -94,11 +102,13 @@ class FixLoopBenchmarkRunner:
 
     async def run_benchmark(self) -> BenchmarkComparisonReport:
         scenarios = self.discover_scenarios()
-        print(f"\nDiscovered {len(scenarios)} benchmark scenarios in '{self.scenarios_dir}':")
+        print(
+            f"\nDiscovered {len(scenarios)} benchmark scenarios in '{self.scenarios_dir}':"
+        )
         for s_dir, s_man in scenarios:
             print(f"  - [{s_man.get('scenario_id')}] {s_man.get('name')}")
 
-        all_records: List[ScenarioEvaluationRecord] = []
+        all_records: list[ScenarioEvaluationRecord] = []
 
         print("\n" + "=" * 80)
         print("RUNNING BENCHMARK EVALUATION (FixLoop vs Log-Only Baseline)")
@@ -111,12 +121,16 @@ class FixLoopBenchmarkRunner:
             # 1. Run Log-Only Baseline
             baseline_rec = LogOnlyBaselineRunner.evaluate_scenario(s_dir, s_man)
             all_records.append(baseline_rec)
-            print(f"  [Baseline] Accurate: {baseline_rec.root_cause_accuracy} | Cause: {baseline_rec.identified_root_cause} | FalseClaims: {baseline_rec.false_claims_of_success}")
+            print(
+                f"  [Baseline] Accurate: {baseline_rec.root_cause_accuracy} | Cause: {baseline_rec.identified_root_cause} | FalseClaims: {baseline_rec.false_claims_of_success}"
+            )
 
             # 2. Run FixLoop
             fixloop_rec = await FixLoopEvaluator.evaluate_scenario(s_dir, s_man)
             all_records.append(fixloop_rec)
-            print(f"  [FixLoop]  Accurate: {fixloop_rec.root_cause_accuracy} | Cause: {fixloop_rec.identified_root_cause} | Probes: {fixloop_rec.diagnostic_tests_required} | VerifSuccess: {fixloop_rec.actual_verification_success}")
+            print(
+                f"  [FixLoop]  Accurate: {fixloop_rec.root_cause_accuracy} | Cause: {fixloop_rec.identified_root_cause} | Probes: {fixloop_rec.diagnostic_tests_required} | VerifSuccess: {fixloop_rec.actual_verification_success}"
+            )
 
         # Compute summaries
         fixloop_summary = self.compute_summary(all_records, "fixloop")
@@ -178,73 +192,175 @@ def export_reports(report: BenchmarkComparisonReport, output_dir: Path = REPO_RO
     csv_path = output_dir / "eval_results.csv"
     with open(csv_path, mode="w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow([
-            "Scenario ID",
-            "Scenario Category",
-            "Agent Type",
-            "Expected Cause",
-            "Identified Cause",
-            "Root Cause Accuracy",
-            "Diagnostic Steps Taken",
-            "Unnecessary Tests",
-            "Correct Insufficient Evidence",
-            "Patch Generated",
-            "Patch Applied Cleanly",
-            "Actual Verification Success",
-            "False Claims Of Success",
-            "Latency Duration (ms)",
-            "Prompt Tokens",
-            "Completion Tokens",
-            "Total Tokens",
-            "Estimated Cost (USD)",
-            "Failures/Retries",
-            "Notes",
-        ])
+        writer.writerow(
+            [
+                "Scenario ID",
+                "Scenario Category",
+                "Agent Type",
+                "Expected Cause",
+                "Identified Cause",
+                "Root Cause Accuracy",
+                "Diagnostic Steps Taken",
+                "Unnecessary Tests",
+                "Correct Insufficient Evidence",
+                "Patch Generated",
+                "Patch Applied Cleanly",
+                "Actual Verification Success",
+                "False Claims Of Success",
+                "Latency Duration (ms)",
+                "Prompt Tokens",
+                "Completion Tokens",
+                "Total Tokens",
+                "Estimated Cost (USD)",
+                "Failures/Retries",
+                "Notes",
+            ]
+        )
         for r in report.detailed_results:
-            writer.writerow([
-                r.scenario_id,
-                r.scenario_category,
-                r.agent_type,
-                r.expected_root_cause_type,
-                r.identified_root_cause,
-                r.root_cause_accuracy,
-                r.diagnostic_tests_required,
-                r.unnecessary_tests,
-                r.correct_insufficient_evidence_use,
-                r.patch_generated,
-                r.patch_applied_cleanly,
-                r.actual_verification_success,
-                r.false_claims_of_success,
-                r.duration_ms,
-                r.prompt_tokens,
-                r.completion_tokens,
-                r.total_tokens,
-                r.estimated_cost_usd,
-                r.failures_and_retries,
-                r.notes,
-            ])
+            writer.writerow(
+                [
+                    r.scenario_id,
+                    r.scenario_category,
+                    r.agent_type,
+                    r.expected_root_cause_type,
+                    r.identified_root_cause,
+                    r.root_cause_accuracy,
+                    r.diagnostic_tests_required,
+                    r.unnecessary_tests,
+                    r.correct_insufficient_evidence_use,
+                    r.patch_generated,
+                    r.patch_applied_cleanly,
+                    r.actual_verification_success,
+                    r.false_claims_of_success,
+                    r.duration_ms,
+                    r.prompt_tokens,
+                    r.completion_tokens,
+                    r.total_tokens,
+                    r.estimated_cost_usd,
+                    r.failures_and_retries,
+                    r.notes,
+                ]
+            )
     print(f"[OK] Machine-readable CSV saved to: {csv_path}")
 
     # 3. Export Summary CSV
     summary_csv_path = output_dir / "eval_summary.csv"
     with open(summary_csv_path, mode="w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["Metric", "FixLoop (Evidence-Driven)", "Log-Only Baseline", "Delta / Notes"])
+        writer.writerow(
+            [
+                "Metric",
+                "FixLoop (Evidence-Driven)",
+                "Log-Only Baseline",
+                "Delta / Notes",
+            ]
+        )
         f_s = report.fixloop_summary
         b_s = report.baseline_summary
-        writer.writerow(["Total Scenarios Evaluated", f_s.total_scenarios, b_s.total_scenarios, "Identical deterministic fixtures"])
-        writer.writerow(["Root-Cause Accuracy Rate", f"{f_s.root_cause_accuracy_rate * 100:.1f}%", f"{b_s.root_cause_accuracy_rate * 100:.1f}%", f"+{(f_s.root_cause_accuracy_rate - b_s.root_cause_accuracy_rate) * 100:.1f}% improvement"])
-        writer.writerow(["Total Diagnostic Steps", f_s.total_diagnostic_probes, b_s.total_diagnostic_probes, "FixLoop executes discriminating probes"])
-        writer.writerow(["Avg Diagnostic Steps / Scenario", f_s.avg_diagnostic_probes_per_scenario, b_s.avg_diagnostic_probes_per_scenario, "Targeted minimal probing"])
-        writer.writerow(["Total Unnecessary Tests", f_s.total_unnecessary_tests, b_s.total_unnecessary_tests, "Zero redundant/zero-EIG tests"])
-        writer.writerow(["Patch Verification Rate", f"{f_s.patch_verification_rate * 100:.1f}%", f"{b_s.patch_verification_rate * 100:.1f}%", "Verified fixed / generated patches"])
-        writer.writerow(["Actual Verification Success Rate", f"{f_s.actual_verification_success_rate * 100:.1f}%", f"{b_s.actual_verification_success_rate * 100:.1f}%", "Empirical exit code 0 in sandbox"])
-        writer.writerow(["False Claims of Successful Fixes", f_s.false_claims_of_success_count, b_s.false_claims_of_success_count, "FixLoop: 0 false claims; Baseline: 4 false claims"])
-        writer.writerow(["Insufficient Evidence Accuracy", f"{f_s.insufficient_evidence_accuracy_rate * 100:.1f}%", f"{b_s.insufficient_evidence_accuracy_rate * 100:.1f}%", "Honest refusal without hallucinating fixes"])
-        writer.writerow(["Avg Latency Duration (ms)", f"{f_s.avg_duration_ms:.1f} ms", f"{b_s.avg_duration_ms:.1f} ms", "End-to-end investigation latency"])
-        writer.writerow(["Total Tokens Consumed", f_s.total_tokens_consumed, b_s.total_tokens_consumed, "Measured prompt + completion tokens"])
-        writer.writerow(["Avg Tokens / Scenario", f_s.avg_tokens_per_scenario, b_s.avg_tokens_per_scenario, "Token efficiency"])
-        writer.writerow(["Estimated Cost (USD)", f"${f_s.estimated_inference_cost_usd:.6f}", f"${b_s.estimated_inference_cost_usd:.6f}", "Pricing basis: $0.35/1M tokens"])
+        writer.writerow(
+            [
+                "Total Scenarios Evaluated",
+                f_s.total_scenarios,
+                b_s.total_scenarios,
+                "Identical deterministic fixtures",
+            ]
+        )
+        writer.writerow(
+            [
+                "Root-Cause Accuracy Rate",
+                f"{f_s.root_cause_accuracy_rate * 100:.1f}%",
+                f"{b_s.root_cause_accuracy_rate * 100:.1f}%",
+                f"+{(f_s.root_cause_accuracy_rate - b_s.root_cause_accuracy_rate) * 100:.1f}% improvement",
+            ]
+        )
+        writer.writerow(
+            [
+                "Total Diagnostic Steps",
+                f_s.total_diagnostic_probes,
+                b_s.total_diagnostic_probes,
+                "FixLoop executes discriminating probes",
+            ]
+        )
+        writer.writerow(
+            [
+                "Avg Diagnostic Steps / Scenario",
+                f_s.avg_diagnostic_probes_per_scenario,
+                b_s.avg_diagnostic_probes_per_scenario,
+                "Targeted minimal probing",
+            ]
+        )
+        writer.writerow(
+            [
+                "Total Unnecessary Tests",
+                f_s.total_unnecessary_tests,
+                b_s.total_unnecessary_tests,
+                "Zero redundant/zero-EIG tests",
+            ]
+        )
+        writer.writerow(
+            [
+                "Patch Verification Rate",
+                f"{f_s.patch_verification_rate * 100:.1f}%",
+                f"{b_s.patch_verification_rate * 100:.1f}%",
+                "Verified fixed / generated patches",
+            ]
+        )
+        writer.writerow(
+            [
+                "Actual Verification Success Rate",
+                f"{f_s.actual_verification_success_rate * 100:.1f}%",
+                f"{b_s.actual_verification_success_rate * 100:.1f}%",
+                "Empirical exit code 0 in sandbox",
+            ]
+        )
+        writer.writerow(
+            [
+                "False Claims of Successful Fixes",
+                f_s.false_claims_of_success_count,
+                b_s.false_claims_of_success_count,
+                "FixLoop: 0 false claims; Baseline: 4 false claims",
+            ]
+        )
+        writer.writerow(
+            [
+                "Insufficient Evidence Accuracy",
+                f"{f_s.insufficient_evidence_accuracy_rate * 100:.1f}%",
+                f"{b_s.insufficient_evidence_accuracy_rate * 100:.1f}%",
+                "Honest refusal without hallucinating fixes",
+            ]
+        )
+        writer.writerow(
+            [
+                "Avg Latency Duration (ms)",
+                f"{f_s.avg_duration_ms:.1f} ms",
+                f"{b_s.avg_duration_ms:.1f} ms",
+                "End-to-end investigation latency",
+            ]
+        )
+        writer.writerow(
+            [
+                "Total Tokens Consumed",
+                f_s.total_tokens_consumed,
+                b_s.total_tokens_consumed,
+                "Measured prompt + completion tokens",
+            ]
+        )
+        writer.writerow(
+            [
+                "Avg Tokens / Scenario",
+                f_s.avg_tokens_per_scenario,
+                b_s.avg_tokens_per_scenario,
+                "Token efficiency",
+            ]
+        )
+        writer.writerow(
+            [
+                "Estimated Cost (USD)",
+                f"${f_s.estimated_inference_cost_usd:.6f}",
+                f"${b_s.estimated_inference_cost_usd:.6f}",
+                "Pricing basis: $0.35/1M tokens",
+            ]
+        )
     print(f"[OK] Machine-readable Summary CSV saved to: {summary_csv_path}")
 
 
@@ -255,22 +371,52 @@ def print_comparison_table(report: BenchmarkComparisonReport):
     print("\n" + "=" * 95)
     print(f"{'EVALUATION BENCHMARK METRICS SUMMARY':^95}")
     print("=" * 95)
-    print(f"{'Metric':<42} | {'FixLoop (Evidence-Driven)':<24} | {'Log-Only Baseline':<24}")
+    print(
+        f"{'Metric':<42} | {'FixLoop (Evidence-Driven)':<24} | {'Log-Only Baseline':<24}"
+    )
     print("-" * 95)
-    print(f"{'Total Scenarios Evaluated':<42} | {f_sum.total_scenarios:<24} | {b_sum.total_scenarios:<24}")
-    print(f"{'Root-Cause Accuracy Rate [MEASURED]':<42} | {f'{f_sum.root_cause_accuracy_rate * 100:.1f}%':<24} | {f'{b_sum.root_cause_accuracy_rate * 100:.1f}%':<24}")
-    print(f"{'Total Diagnostic Steps [MEASURED]':<42} | {f_sum.total_diagnostic_probes:<24} | {b_sum.total_diagnostic_probes:<24}")
-    print(f"{'Avg Diagnostic Steps / Scenario [MEASURED]':<42} | {f_sum.avg_diagnostic_probes_per_scenario:<24} | {b_sum.avg_diagnostic_probes_per_scenario:<24}")
-    print(f"{'Total Unnecessary Tests [MEASURED]':<42} | {f_sum.total_unnecessary_tests:<24} | {b_sum.total_unnecessary_tests:<24}")
-    print(f"{'Patch Verification Rate [MEASURED]':<42} | {f'{f_sum.patch_verification_rate * 100:.1f}%':<24} | {f'{b_sum.patch_verification_rate * 100:.1f}%':<24}")
-    print(f"{'Actual Verification Success Rate [MEASURED]':<42} | {f'{f_sum.actual_verification_success_rate * 100:.1f}%':<24} | {f'{b_sum.actual_verification_success_rate * 100:.1f}%':<24}")
-    print(f"{'False Success Claims [MEASURED]':<42} | {f_sum.false_claims_of_success_count:<24} | {b_sum.false_claims_of_success_count:<24}")
-    print(f"{'Insufficient Evidence Accuracy [MEASURED]':<42} | {f'{f_sum.insufficient_evidence_accuracy_rate * 100:.1f}%':<24} | {f'{b_sum.insufficient_evidence_accuracy_rate * 100:.1f}%':<24}")
-    print(f"{'Avg Latency Duration [MEASURED]':<42} | {f'{f_sum.avg_duration_ms:.1f} ms':<24} | {f'{b_sum.avg_duration_ms:.1f} ms':<24}")
-    print(f"{'Total Tokens Consumed [MEASURED]':<42} | {f_sum.total_tokens_consumed:<24} | {b_sum.total_tokens_consumed:<24}")
-    print(f"{'Avg Tokens / Scenario [MEASURED]':<42} | {f_sum.avg_tokens_per_scenario:<24} | {b_sum.avg_tokens_per_scenario:<24}")
-    print(f"{'Estimated Inference Cost (USD) [ESTIMATE]':<42} | {f'${f_sum.estimated_inference_cost_usd:.6f}':<24} | {f'${b_sum.estimated_inference_cost_usd:.6f}':<24}")
-    print(f"{'Failures & Verification Retries [MEASURED]':<42} | {f_sum.total_retries:<24} | {b_sum.total_retries:<24}")
+    print(
+        f"{'Total Scenarios Evaluated':<42} | {f_sum.total_scenarios:<24} | {b_sum.total_scenarios:<24}"
+    )
+    print(
+        f"{'Root-Cause Accuracy Rate [MEASURED]':<42} | {f'{f_sum.root_cause_accuracy_rate * 100:.1f}%':<24} | {f'{b_sum.root_cause_accuracy_rate * 100:.1f}%':<24}"
+    )
+    print(
+        f"{'Total Diagnostic Steps [MEASURED]':<42} | {f_sum.total_diagnostic_probes:<24} | {b_sum.total_diagnostic_probes:<24}"
+    )
+    print(
+        f"{'Avg Diagnostic Steps / Scenario [MEASURED]':<42} | {f_sum.avg_diagnostic_probes_per_scenario:<24} | {b_sum.avg_diagnostic_probes_per_scenario:<24}"
+    )
+    print(
+        f"{'Total Unnecessary Tests [MEASURED]':<42} | {f_sum.total_unnecessary_tests:<24} | {b_sum.total_unnecessary_tests:<24}"
+    )
+    print(
+        f"{'Patch Verification Rate [MEASURED]':<42} | {f'{f_sum.patch_verification_rate * 100:.1f}%':<24} | {f'{b_sum.patch_verification_rate * 100:.1f}%':<24}"
+    )
+    print(
+        f"{'Actual Verification Success Rate [MEASURED]':<42} | {f'{f_sum.actual_verification_success_rate * 100:.1f}%':<24} | {f'{b_sum.actual_verification_success_rate * 100:.1f}%':<24}"
+    )
+    print(
+        f"{'False Success Claims [MEASURED]':<42} | {f_sum.false_claims_of_success_count:<24} | {b_sum.false_claims_of_success_count:<24}"
+    )
+    print(
+        f"{'Insufficient Evidence Accuracy [MEASURED]':<42} | {f'{f_sum.insufficient_evidence_accuracy_rate * 100:.1f}%':<24} | {f'{b_sum.insufficient_evidence_accuracy_rate * 100:.1f}%':<24}"
+    )
+    print(
+        f"{'Avg Latency Duration [MEASURED]':<42} | {f'{f_sum.avg_duration_ms:.1f} ms':<24} | {f'{b_sum.avg_duration_ms:.1f} ms':<24}"
+    )
+    print(
+        f"{'Total Tokens Consumed [MEASURED]':<42} | {f_sum.total_tokens_consumed:<24} | {b_sum.total_tokens_consumed:<24}"
+    )
+    print(
+        f"{'Avg Tokens / Scenario [MEASURED]':<42} | {f_sum.avg_tokens_per_scenario:<24} | {b_sum.avg_tokens_per_scenario:<24}"
+    )
+    print(
+        f"{'Estimated Inference Cost (USD) [ESTIMATE]':<42} | {f'${f_sum.estimated_inference_cost_usd:.6f}':<24} | {f'${b_sum.estimated_inference_cost_usd:.6f}':<24}"
+    )
+    print(
+        f"{'Failures & Verification Retries [MEASURED]':<42} | {f_sum.total_retries:<24} | {b_sum.total_retries:<24}"
+    )
     print("=" * 95)
     if report.highest_impact_recommendation:
         rec = report.highest_impact_recommendation

@@ -11,27 +11,28 @@ Guarantees:
 """
 
 from __future__ import annotations
-import os
+
+import contextlib
 import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-from pydantic import BaseModel, Field
-import yaml
+from typing import Self
 
-from backend.app.core.models import (
-    DiagnosisStatus,
-    DiagnoseHypothesis,
-    VerificationStatus,
-    utc_now,
-)
+import yaml
+from pydantic import BaseModel
+
 from backend.app.agent.patcher import (
+    ControlledPatchGenerator,
+    InsufficientEvidenceError,
     PatchProposal,
     PatchValidator,
     PurePythonDiffPatcher,
-    ControlledPatchGenerator,
-    InsufficientEvidenceError,
+)
+from backend.app.core.models import (
+    DiagnoseHypothesis,
+    DiagnosisStatus,
+    VerificationStatus,
 )
 
 # Allowlist of safe, predefined verification procedures
@@ -45,6 +46,7 @@ ALLOWED_VERIFICATION_PROCEDURES = {
 
 class VerificationExecutionResult(BaseModel):
     """Result of running a predefined verification procedure in the sandbox."""
+
     procedure_name: str
     exit_code: int
     stdout: str
@@ -56,16 +58,17 @@ class VerificationExecutionResult(BaseModel):
 
 class VerificationReport(BaseModel):
     """Comprehensive auditable verification outcome report."""
+
     status: VerificationStatus
-    patch_id: Optional[str] = None
-    target_file: Optional[str] = None
-    patch_diff: Optional[str] = None
+    patch_id: str | None = None
+    target_file: str | None = None
+    patch_diff: str | None = None
     test_output: str = ""
     expected_criteria: str = ""
     attempts: int = 1
     reverted: bool = True
     duration_ms: int = 0
-    failure_evidence: Optional[str] = None
+    failure_evidence: str | None = None
 
 
 class DisposableSandbox:
@@ -74,17 +77,22 @@ class DisposableSandbox:
     def __init__(self, project_root: Path, timeout_seconds: float = 5.0):
         self.project_root = project_root.resolve()
         self.timeout_seconds = timeout_seconds
-        self._temp_dir: Optional[tempfile.TemporaryDirectory] = None
-        self.sandbox_path: Optional[Path] = None
+        self._temp_dir: tempfile.TemporaryDirectory | None = None
+        self.sandbox_path: Path | None = None
 
-    def __enter__(self) -> DisposableSandbox:
+    def __enter__(self) -> Self:
         self._temp_dir = tempfile.TemporaryDirectory(prefix="fixloop_sandbox_")
         self.sandbox_path = Path(self._temp_dir.name)
 
         # Copy approved project files into disposable sandbox
         # Never copy .env, credentials, or Docker socket
         for item in self.project_root.glob("*"):
-            if item.name.startswith(".env") or item.name.startswith(".git") or item.name.endswith(".key") or item.name.endswith(".pem"):
+            if (
+                item.name.startswith(".env")
+                or item.name.startswith(".git")
+                or item.name.endswith(".key")
+                or item.name.endswith(".pem")
+            ):
                 continue  # Strip secrets and VCS
             if item.is_file():
                 shutil.copy2(item, self.sandbox_path / item.name)
@@ -99,31 +107,36 @@ class DisposableSandbox:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self._temp_dir:
-            try:
+            with contextlib.suppress(Exception):
                 self._temp_dir.cleanup()
-            except Exception:
-                pass
             self._temp_dir = None
             self.sandbox_path = None
 
-    def apply_patch(self, proposal: PatchProposal) -> Tuple[bool, str]:
+    def apply_patch(self, proposal: PatchProposal) -> tuple[bool, str]:
         """Applies patch to sandbox file in place using pure Python diff engine."""
         if not self.sandbox_path:
             return False, "Sandbox not initialized"
 
         target_path = self.sandbox_path / proposal.target_file
         if not target_path.exists():
-            return False, f"Target file '{proposal.target_file}' does not exist in sandbox"
+            return (
+                False,
+                f"Target file '{proposal.target_file}' does not exist in sandbox",
+            )
 
         old_text = target_path.read_text(encoding="utf-8", errors="replace")
-        success, new_text, err = PurePythonDiffPatcher.apply_patch_to_text(old_text, proposal.diff_unified)
+        success, new_text, err = PurePythonDiffPatcher.apply_patch_to_text(
+            old_text, proposal.diff_unified
+        )
         if not success:
             return False, f"Failed applying diff: {err}"
 
         target_path.write_text(new_text, encoding="utf-8")
         return True, ""
 
-    def run_verification_procedure(self, procedure_name: str) -> VerificationExecutionResult:
+    def run_verification_procedure(
+        self, procedure_name: str
+    ) -> VerificationExecutionResult:
         """Executes a registered, allowlisted verification check inside the sandbox."""
         start_time = time.perf_counter()
 
@@ -168,12 +181,13 @@ class DisposableSandbox:
                 env_found = False
                 for s_conf in services.values():
                     env_list = s_conf.get("environment", [])
-                    if isinstance(env_list, list):
-                        if any("DATABASE_URL=" in e for e in env_list if isinstance(e, str)):
-                            env_found = True
-                    elif isinstance(env_list, dict):
-                        if "DATABASE_URL" in env_list:
-                            env_found = True
+                    if (
+                        isinstance(env_list, list)
+                        and any(
+                            "DATABASE_URL=" in e for e in env_list if isinstance(e, str)
+                        )
+                    ) or (isinstance(env_list, dict) and "DATABASE_URL" in env_list):
+                        env_found = True
 
                 duration_ms = int((time.perf_counter() - start_time) * 1000)
                 if env_found:
@@ -225,7 +239,11 @@ class DisposableSandbox:
             main_text = main_path.read_text(encoding="utf-8")
 
             # Check if compose now probes /healthz
-            has_healthz_check = "/healthz" in compose_text and "/health\"" not in compose_text and "/health\'" not in compose_text
+            has_healthz_check = (
+                "/healthz" in compose_text
+                and '/health"' not in compose_text
+                and "/health'" not in compose_text
+            )
             has_healthz_route = "/healthz" in main_text
 
             duration_ms = int((time.perf_counter() - start_time) * 1000)
@@ -266,7 +284,9 @@ class DisposableSandbox:
 
             compose_text = compose_path.read_text(encoding="utf-8")
             # Correct port mapping should be "8000:8000"
-            has_correct_ports = "8000:8000" in compose_text and "8000:5000" not in compose_text
+            has_correct_ports = (
+                "8000:8000" in compose_text and "8000:5000" not in compose_text
+            )
 
             duration_ms = int((time.perf_counter() - start_time) * 1000)
             if has_correct_ports:
@@ -350,7 +370,10 @@ class ControlledVerificationPipeline:
         start_time = time.perf_counter()
 
         # Step 1: Require sufficient supporting evidence before creating patch
-        if diagnosis_status != DiagnosisStatus.DIAGNOSIS_AVAILABLE or hypothesis.confidence < 0.90:
+        if (
+            diagnosis_status != DiagnosisStatus.DIAGNOSIS_AVAILABLE
+            or hypothesis.confidence < 0.90
+        ):
             return VerificationReport(
                 status=VerificationStatus.NOT_ATTEMPTED,
                 test_output="Patch not attempted: insufficient evidence or low confidence.",
@@ -408,7 +431,7 @@ class ControlledVerificationPipeline:
 
         # Step 5: Execute in disposable sandbox with at most max_retries
         attempts = 0
-        last_result: Optional[VerificationExecutionResult] = None
+        last_result: VerificationExecutionResult | None = None
 
         while attempts <= max_retries:
             attempts += 1
@@ -428,7 +451,9 @@ class ControlledVerificationPipeline:
                     )
 
                 # Run predefined verification check in isolated sandbox
-                exec_result = sandbox.run_verification_procedure(proposal.verification_procedure)
+                exec_result = sandbox.run_verification_procedure(
+                    proposal.verification_procedure
+                )
                 last_result = exec_result
 
                 if exec_result.passed:
@@ -460,7 +485,11 @@ class ControlledVerificationPipeline:
             patch_diff=proposal.diff_unified,
             test_output=last_result.stdout if last_result else "Verification failed",
             expected_criteria=last_result.expected_criteria if last_result else "",
-            failure_evidence=last_result.stderr if (last_result and last_result.stderr) else (last_result.stdout if last_result else "Unknown failure"),
+            failure_evidence=(
+                last_result.stderr
+                if (last_result and last_result.stderr)
+                else (last_result.stdout if last_result else "Unknown failure")
+            ),
             attempts=attempts,
             reverted=True,  # Failed changes unconditionally reverted
             duration_ms=duration_ms,

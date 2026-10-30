@@ -12,29 +12,29 @@ Guarantees:
 9. Verification API endpoint POST /api/v1/verify works end-to-end.
 """
 
-import pytest
 from pathlib import Path
+
 import httpx
+import pytest
 from httpx import ASGITransport
 
-from backend.app.core.models import (
-    DiagnosisStatus,
-    DiagnoseHypothesis,
-    VerificationStatus,
-)
 from backend.app.agent.engine import DiagnosticEngine
 from backend.app.agent.patcher import (
+    ControlledPatchGenerator,
     PatchProposal,
     PatchValidator,
     PurePythonDiffPatcher,
-    ControlledPatchGenerator,
-    InsufficientEvidenceError,
 )
-from backend.app.sandbox.verifier import (
-    DisposableSandbox,
-    ControlledVerificationPipeline,
+from backend.app.core.models import (
+    DiagnoseHypothesis,
+    DiagnosisStatus,
+    VerificationStatus,
 )
 from backend.app.main import app
+from backend.app.sandbox.verifier import (
+    ControlledVerificationPipeline,
+    DisposableSandbox,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCENARIOS_DIR = REPO_ROOT / "scenarios"
@@ -43,6 +43,7 @@ SCENARIOS_DIR = REPO_ROOT / "scenarios"
 # =========================================================================
 # Unit Tests: Pure Python Diff Engine & Patch Validator
 # =========================================================================
+
 
 def test_pure_python_diff_patcher_success():
     """Validates pure Python diff application without host shell tools."""
@@ -78,7 +79,9 @@ def test_malicious_diff_payload_rejection():
         ),
         explanation="Malicious command injection attempt",
     )
-    is_valid, err = PatchValidator.validate_patch(REPO_ROOT / "scenarios" / "scenario_a_missing_env", proposal)
+    is_valid, err = PatchValidator.validate_patch(
+        REPO_ROOT / "scenarios" / "scenario_a_missing_env", proposal
+    )
     assert is_valid is False
     assert "prohibited shell command payload" in err.lower()
 
@@ -98,9 +101,14 @@ def test_path_traversal_rejection():
         ),
         explanation="Path traversal attempt",
     )
-    is_valid, err = PatchValidator.validate_patch(REPO_ROOT / "scenarios" / "scenario_a_missing_env", proposal)
+    is_valid, err = PatchValidator.validate_patch(
+        REPO_ROOT / "scenarios" / "scenario_a_missing_env", proposal
+    )
     assert is_valid is False
-    assert "security boundary violation" in err.lower() or "not in the approved" in err.lower()
+    assert (
+        "security boundary violation" in err.lower()
+        or "not in the approved" in err.lower()
+    )
 
 
 def test_sensitive_file_modification_rejection():
@@ -110,14 +118,13 @@ def test_sensitive_file_modification_rejection():
         hypothesis_id="hyp-env",
         target_file=".env",
         diff_unified=(
-            "--- a/.env\n"
-            "+++ b/.env\n"
-            "@@ -1,1 +1,1 @@\n"
-            "+SECRET_KEY=leaked\n"
+            "--- a/.env\n" "+++ b/.env\n" "@@ -1,1 +1,1 @@\n" "+SECRET_KEY=leaked\n"
         ),
         explanation="Direct .env edit attempt",
     )
-    is_valid, err = PatchValidator.validate_patch(REPO_ROOT / "scenarios" / "scenario_a_missing_env", proposal)
+    is_valid, err = PatchValidator.validate_patch(
+        REPO_ROOT / "scenarios" / "scenario_a_missing_env", proposal
+    )
     assert is_valid is False
     assert "strictly forbidden" in err.lower() or "not in the approved" in err.lower()
 
@@ -131,7 +138,9 @@ def test_invalid_diff_format_rejection():
         diff_unified="Just replace port 5000 with 8000 please",
         explanation="Unstructured plain text diff",
     )
-    is_valid, err = PatchValidator.validate_patch(REPO_ROOT / "scenarios" / "scenario_a_missing_env", proposal)
+    is_valid, err = PatchValidator.validate_patch(
+        REPO_ROOT / "scenarios" / "scenario_a_missing_env", proposal
+    )
     assert is_valid is False
     assert "unified diff" in err.lower()
 
@@ -139,6 +148,7 @@ def test_invalid_diff_format_rejection():
 # =========================================================================
 # Integration Tests: Scenario Reproducible Fixes & Verification Pipeline
 # =========================================================================
+
 
 @pytest.mark.asyncio
 async def test_scenario_a_reproducible_fix():
@@ -254,19 +264,26 @@ async def test_scenario_d_insufficient_evidence_prevents_patch():
     report = await ControlledVerificationPipeline.verify_hypothesis_fix(
         project_root=scenario_path,
         diagnosis_status=diag_result.status,
-        hypothesis=diag_result.hypotheses[0] if diag_result.hypotheses else DiagnoseHypothesis(
-            id="hyp-unknown",
-            description="Unknown failure",
-            confidence=0.3,
-            supporting_evidence=[],
-            refuting_evidence=[],
+        hypothesis=(
+            diag_result.hypotheses[0]
+            if diag_result.hypotheses
+            else DiagnoseHypothesis(
+                id="hyp-unknown",
+                description="Unknown failure",
+                confidence=0.3,
+                supporting_evidence=[],
+                refuting_evidence=[],
+            )
         ),
         user_approved=True,
     )
 
     # 3. Assert not attempted
     assert report.status == VerificationStatus.NOT_ATTEMPTED
-    assert "insufficient evidence" in report.test_output.lower() or "low confidence" in report.test_output.lower()
+    assert (
+        "insufficient evidence" in report.test_output.lower()
+        or "low confidence" in report.test_output.lower()
+    )
     assert report.patch_diff is None
 
 
@@ -274,17 +291,20 @@ async def test_scenario_d_insufficient_evidence_prevents_patch():
 async def test_failed_verification_records_failure_and_retries(monkeypatch):
     """Verification failure never produces a success claim and enforces at most 1 controlled retry."""
     import difflib
+
     scenario_path = SCENARIOS_DIR / "scenario_c_port_mismatch"
 
     # Fabricate a patch that changes the port to 9999 instead of 8000
     compose_orig = (scenario_path / "docker-compose.yml").read_text(encoding="utf-8")
     compose_wrong = compose_orig.replace("8000:5000", "8000:9999")
-    diff_wrong = "".join(difflib.unified_diff(
-        compose_orig.splitlines(keepends=True),
-        compose_wrong.splitlines(keepends=True),
-        fromfile="a/docker-compose.yml",
-        tofile="b/docker-compose.yml",
-    ))
+    diff_wrong = "".join(
+        difflib.unified_diff(
+            compose_orig.splitlines(keepends=True),
+            compose_wrong.splitlines(keepends=True),
+            fromfile="a/docker-compose.yml",
+            tofile="b/docker-compose.yml",
+        )
+    )
 
     failing_proposal = PatchProposal(
         id="patch-wrong-fix",
@@ -371,12 +391,16 @@ async def test_human_approval_gate_for_high_risk_patches():
 # API Integration Tests: POST /api/v1/verify
 # =========================================================================
 
+
 @pytest.mark.asyncio
 async def test_api_verify_scenario_a():
     """API: POST /api/v1/verify resolves Scenario A and returns verified_fixed."""
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/api/v1/verify", json={"scenario_name": "scenario_a", "user_approved": True})
+        resp = await client.post(
+            "/api/v1/verify",
+            json={"scenario_name": "scenario_a", "user_approved": True},
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "verified_fixed"
@@ -389,7 +413,10 @@ async def test_api_verify_scenario_b():
     """API: POST /api/v1/verify resolves Scenario B and returns verified_fixed."""
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/api/v1/verify", json={"scenario_name": "scenario_b", "user_approved": True})
+        resp = await client.post(
+            "/api/v1/verify",
+            json={"scenario_name": "scenario_b", "user_approved": True},
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "verified_fixed"
@@ -402,7 +429,10 @@ async def test_api_verify_scenario_c():
     """API: POST /api/v1/verify resolves Scenario C and returns verified_fixed."""
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/api/v1/verify", json={"scenario_name": "scenario_c", "user_approved": True})
+        resp = await client.post(
+            "/api/v1/verify",
+            json={"scenario_name": "scenario_c", "user_approved": True},
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "verified_fixed"
@@ -415,7 +445,10 @@ async def test_api_verify_scenario_d_insufficient_evidence():
     """API: POST /api/v1/verify on Scenario D returns not_attempted."""
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/api/v1/verify", json={"scenario_name": "scenario_d", "user_approved": True})
+        resp = await client.post(
+            "/api/v1/verify",
+            json={"scenario_name": "scenario_d", "user_approved": True},
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "not_attempted"

@@ -7,19 +7,40 @@ Reduces token consumption by 50-80% without losing diagnostic signal:
 """
 
 from __future__ import annotations
+
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from backend.app.core.models import EvidenceItem, EvidenceType
+from backend.app.core.models import EvidenceType
 
 DIAGNOSTIC_LOG_PATTERNS = [
-    re.compile(p, re.IGNORECASE) for p in [
-        r"error", r"exception", r"traceback", r"fatal", r"critical",
-        r"fail", r"timeout", r"refused", r"kill", r"oom", r"exit\s*(?:code)?\s*\d+",
-        r"keyerror", r"connection", r"cannot", r"denied", r"syntaxerror",
-        r"started", r"starting", r"running on", r"listening", r"uvicorn",
-        r"boot", r"unhealthy", r"mismatch"
+    re.compile(p, re.IGNORECASE)
+    for p in [
+        r"error",
+        r"exception",
+        r"traceback",
+        r"fatal",
+        r"critical",
+        r"fail",
+        r"timeout",
+        r"refused",
+        r"kill",
+        r"oom",
+        r"exit\s*(?:code)?\s*\d+",
+        r"keyerror",
+        r"connection",
+        r"cannot",
+        r"denied",
+        r"syntaxerror",
+        r"started",
+        r"starting",
+        r"running on",
+        r"listening",
+        r"uvicorn",
+        r"boot",
+        r"unhealthy",
+        r"mismatch",
     ]
 ]
 
@@ -67,30 +88,40 @@ class EvidenceTrimmer:
         # Truncate to max_chars safely
         result = "\n".join(final_lines)
         if len(result) > max_chars:
-            result = result[:max_chars - 20] + "\n[...trimmed...]"
+            result = result[: max_chars - 20] + "\n[...trimmed...]"
         return result
 
     @staticmethod
-    def trim_docker_inspect(inspect_data: Dict[str, Any]) -> Dict[str, Any]:
+    def trim_docker_inspect(inspect_data: dict[str, Any]) -> dict[str, Any]:
         """Compresses 10KB+ docker inspect dumps into essential diagnostic runtime keys."""
         if not isinstance(inspect_data, dict):
             return {}
 
         state = inspect_data.get("State", {})
         health = state.get("Health", {}) if isinstance(state, dict) else {}
-        network_settings = inspect_data.get("NetworkSettings", {}) if isinstance(inspect_data, dict) else {}
-        host_config = inspect_data.get("HostConfig", {}) if isinstance(inspect_data, dict) else {}
-        config = inspect_data.get("Config", {}) if isinstance(inspect_data, dict) else {}
+        network_settings = (
+            inspect_data.get("NetworkSettings", {})
+            if isinstance(inspect_data, dict)
+            else {}
+        )
+        host_config = (
+            inspect_data.get("HostConfig", {}) if isinstance(inspect_data, dict) else {}
+        )
+        config = (
+            inspect_data.get("Config", {}) if isinstance(inspect_data, dict) else {}
+        )
 
         # Safely extract healthcheck logs
         health_log_snippets = []
         if isinstance(health, dict) and "Log" in health:
             for entry in health.get("Log", [])[-2:]:  # Keep last 2 health log entries
                 if isinstance(entry, dict):
-                    health_log_snippets.append({
-                        "exit_code": entry.get("ExitCode"),
-                        "output": (entry.get("Output", "") or "")[:120].strip(),
-                    })
+                    health_log_snippets.append(
+                        {
+                            "exit_code": entry.get("ExitCode"),
+                            "output": (entry.get("Output", "") or "")[:120].strip(),
+                        }
+                    )
 
         # Mask sensitive environment variable values
         env_keys = []
@@ -108,12 +139,22 @@ class EvidenceTrimmer:
             "status": state.get("Status") if isinstance(state, dict) else None,
             "exit_code": state.get("ExitCode") if isinstance(state, dict) else None,
             "oom_killed": state.get("OOMKilled") if isinstance(state, dict) else None,
-            "error": state.get("Error") if isinstance(state, dict) and state.get("Error") else None,
+            "error": (
+                state.get("Error")
+                if isinstance(state, dict) and state.get("Error")
+                else None
+            ),
             "health_status": health.get("Status") if isinstance(health, dict) else None,
-            "health_failing_streak": health.get("FailingStreak") if isinstance(health, dict) else None,
+            "health_failing_streak": (
+                health.get("FailingStreak") if isinstance(health, dict) else None
+            ),
             "health_recent_checks": health_log_snippets or None,
             "ports": ports,
-            "restart_policy": host_config.get("RestartPolicy", {}).get("Name") if isinstance(host_config, dict) else None,
+            "restart_policy": (
+                host_config.get("RestartPolicy", {}).get("Name")
+                if isinstance(host_config, dict)
+                else None
+            ),
             "declared_env_keys": env_keys[:25],
         }
 
@@ -125,11 +166,18 @@ class EvidenceTrimmer:
         """Trims individual evidence item content according to its source type."""
         content = getattr(item, "content", "").strip()
         item_type = getattr(item, "type", None)
-        item_type_val = getattr(item_type, "value", None) or getattr(item, "provenance_type", "EVIDENCE")
+        item_type_val = getattr(item_type, "value", None) or getattr(
+            item, "provenance_type", "EVIDENCE"
+        )
 
         if item_type == EvidenceType.LOGS or "log" in str(item_type_val).lower():
-            trimmed = EvidenceTrimmer.trim_logs(content, max_lines=25, max_chars=max_chars)
-        elif item_type == EvidenceType.DOCKER_INSPECT or "inspect" in str(item_type_val).lower():
+            trimmed = EvidenceTrimmer.trim_logs(
+                content, max_lines=25, max_chars=max_chars
+            )
+        elif (
+            item_type == EvidenceType.DOCKER_INSPECT
+            or "inspect" in str(item_type_val).lower()
+        ):
             try:
                 parsed = json.loads(content)
                 trimmed_dict = EvidenceTrimmer.trim_docker_inspect(parsed)
@@ -144,7 +192,7 @@ class EvidenceTrimmer:
     @classmethod
     def trim_and_bound_evidence(
         cls,
-        evidence: List[Any],
+        evidence: list[Any],
         max_total_chars: int = 2500,
     ) -> str:
         """Assembles a bounded, prioritized evidence block fitting strict token budgets."""
@@ -163,8 +211,7 @@ class EvidenceTrimmer:
         }
 
         sorted_evidence = sorted(
-            evidence,
-            key=lambda e: priority_map.get(getattr(e, "type", None), 10)
+            evidence, key=lambda e: priority_map.get(getattr(e, "type", None), 10)
         )
 
         formatted_items = []
@@ -172,10 +219,14 @@ class EvidenceTrimmer:
 
         for item in sorted_evidence:
             trimmed_text = cls.trim_evidence_item(item, max_chars=450)
-            item_type_val = getattr(getattr(item, "type", None), "value", None) or getattr(item, "provenance_type", "EVIDENCE")
+            item_type_val = getattr(
+                getattr(item, "type", None), "value", None
+            ) or getattr(item, "provenance_type", "EVIDENCE")
             if accumulated_chars + len(trimmed_text) > max_total_chars:
                 # Add compact indicator
-                formatted_items.append(f"[{item.id}] ({item_type_val}): [...omitted to fit token budget...]")
+                formatted_items.append(
+                    f"[{item.id}] ({item_type_val}): [...omitted to fit token budget...]"
+                )
                 break
             formatted_items.append(trimmed_text)
             accumulated_chars += len(trimmed_text) + 1

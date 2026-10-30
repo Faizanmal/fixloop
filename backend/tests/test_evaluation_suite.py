@@ -8,8 +8,9 @@ Validates:
 5. Machine-readable JSON and CSV results are generated with valid schemas.
 """
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 from backend.app.eval.runner import FixLoopBenchmarkRunner, export_reports
 
@@ -49,7 +50,9 @@ async def test_benchmark_suite_execution_and_metrics(tmp_path):
     # Invariant 7: Methodology, limitations, and highest-impact recommendation are documented
     assert "identical_fixtures" in report.methodology
     assert len(report.limitations) >= 3
-    assert "Adaptive Multi-Probe Batching" in report.highest_impact_recommendation.get("title", "")
+    assert "Adaptive Multi-Probe Batching" in report.highest_impact_recommendation.get(
+        "title", ""
+    )
 
     # Invariant 8: Exporting produces valid JSON and CSV reports (including summary CSV)
     export_reports(report, output_dir=tmp_path)

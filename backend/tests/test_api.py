@@ -1,12 +1,17 @@
 """Comprehensive integration tests for FixLoop FastAPI endpoints: /health, /ready, /api/v1/diagnose."""
 
-import time
 import asyncio
+import time
+
 import pytest
-from httpx import AsyncClient, ASGITransport
-from backend.app.main import app
+from httpx import ASGITransport, AsyncClient
+
 from backend.app.core.config import settings
-from backend.app.data.sample_reports import SAMPLE_HEALTHCHECK_FAILURE, SAMPLE_MISSING_ENV_FAILURE
+from backend.app.data.sample_reports import (
+    SAMPLE_HEALTHCHECK_FAILURE,
+    SAMPLE_MISSING_ENV_FAILURE,
+)
+from backend.app.main import app
 
 
 @pytest.mark.asyncio
@@ -52,7 +57,9 @@ async def test_diagnose_validation_failure_on_empty_payload():
     """Verify POST /api/v1/diagnose rejects completely empty diagnostic requests with 422."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post("/api/v1/diagnose", json={"service_name": "empty-app"})
+        response = await client.post(
+            "/api/v1/diagnose", json={"service_name": "empty-app"}
+        )
         assert response.status_code == 422
         assert "At least one diagnostic input" in response.text
 
@@ -62,12 +69,18 @@ async def test_diagnose_successful_healthcheck_sample():
     """Verify POST /api/v1/diagnose with sample healthcheck failure returns valid DiagnoseResponse."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post("/api/v1/diagnose", json=SAMPLE_HEALTHCHECK_FAILURE)
+        response = await client.post(
+            "/api/v1/diagnose", json=SAMPLE_HEALTHCHECK_FAILURE
+        )
         assert response.status_code == 200
         data = response.json()
 
         # Validate required root fields
-        assert data["status"] in ["diagnosis_available", "insufficient_evidence", "human_intervention_required"]
+        assert data["status"] in [
+            "diagnosis_available",
+            "insufficient_evidence",
+            "human_intervention_required",
+        ]
         assert isinstance(data["summary"], str) and len(data["summary"]) > 0
         assert isinstance(data["hypotheses"], list) and len(data["hypotheses"]) > 0
         assert isinstance(data["evidence"], list)
@@ -90,12 +103,17 @@ async def test_diagnose_missing_env_sample():
     """Verify POST /api/v1/diagnose handles missing environment variable sample."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post("/api/v1/diagnose", json=SAMPLE_MISSING_ENV_FAILURE)
+        response = await client.post(
+            "/api/v1/diagnose", json=SAMPLE_MISSING_ENV_FAILURE
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "diagnosis_available"
         assert any(
-            any(w in h["description"].lower() for w in ["database", "env", "configuration", "variable", "missing"])
+            any(
+                w in h["description"].lower()
+                for w in ["database", "env", "configuration", "variable", "missing"]
+            )
             for h in data["hypotheses"]
         )
 
@@ -132,13 +150,18 @@ async def test_diagnose_custom_logs_missing_env():
         assert "DATABASE_URL" in data["summary"]
         assert any("DATABASE_URL" in h["description"] for h in data["hypotheses"])
         # Ensure it NEVER falls back to Scenario B healthcheck
-        assert "/health" not in data["summary"].lower() or "healthcheck" not in data["summary"].lower()
+        assert (
+            "/health" not in data["summary"].lower()
+            or "healthcheck" not in data["summary"].lower()
+        )
 
         # Check that it recorded in /investigations
         inv_res = await client.get("/investigations")
         assert inv_res.status_code == 200
         inv_data = inv_res.json()
-        matching = [inv for inv in inv_data if inv["scenario_name"] == "custom-auth-service"]
+        matching = [
+            inv for inv in inv_data if inv["scenario_name"] == "custom-auth-service"
+        ]
         assert len(matching) > 0
         assert "DATABASE_URL" in matching[-1]["outcome_summary"]
 
@@ -152,14 +175,17 @@ async def test_diagnose_custom_logs_healthcheck_mismatch():
         "logs": "Health check probe failed: GET http://127.0.0.1:8000/health returned 404 Not Found\nApplication exposes route /healthz\nContainer marked unhealthy",
         "configuration_files": {
             "docker-compose.yml": "services:\n  billing-service:\n    healthcheck:\n      test: ['CMD', 'curl', '-f', 'http://localhost:8000/health']"
-        }
+        },
     }
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post("/api/v1/diagnose", json=custom_payload)
         assert response.status_code == 200
         data = response.json()
         assert data["status"] in ["diagnosis_available", "insufficient_evidence"]
-        assert any(k in data["summary"].lower() for k in ["health", "route", "probe", "404", "mismatch"])
+        assert any(
+            k in data["summary"].lower()
+            for k in ["health", "route", "probe", "404", "mismatch"]
+        )
         # Ensure it does NOT report an unrelated database error
         assert "database_url" not in data["summary"].lower()
 
@@ -178,7 +204,10 @@ async def test_diagnose_custom_logs_unrelated_noise():
         data = response.json()
         # Must return insufficient evidence, NOT Scenario B healthcheck mismatch!
         assert data["status"] == "insufficient_evidence"
-        assert "healthcheck" not in data["summary"].lower() or "probe" not in data["summary"].lower()
+        assert (
+            "healthcheck" not in data["summary"].lower()
+            or "probe" not in data["summary"].lower()
+        )
         assert "database_url" not in data["summary"].lower()
         assert len(data["summary"]) > 0
         assert len(data["evidence"]) > 0
@@ -190,7 +219,9 @@ async def test_diagnose_then_verify_persists_in_investigations():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # Step 1: Run diagnose for scenario_a_missing_env
-        diag_resp = await client.post("/api/v1/diagnose", json={"service_name": "scenario_a_missing_env"})
+        diag_resp = await client.post(
+            "/api/v1/diagnose", json={"service_name": "scenario_a_missing_env"}
+        )
         assert diag_resp.status_code == 200
         diag_data = diag_resp.json()
         inv_id = diag_data.get("investigation_id")
@@ -215,7 +246,7 @@ async def test_diagnose_then_verify_persists_in_investigations():
                 "scenario_name": "scenario_a_missing_env",
                 "user_approved": True,
                 "investigation_id": inv_id,
-            }
+            },
         )
         assert verify_resp.status_code == 200
         verify_data = verify_resp.json()
@@ -277,7 +308,9 @@ async def test_idempotent_diagnose_creates_single_investigation():
         invs_res = await client.get("/investigations")
         assert invs_res.status_code == 200
         invs = invs_res.json()
-        matching_runs = [i for i in invs if i.get("id") == inv_id1 or i.get("idempotency_key") == key]
+        matching_runs = [
+            i for i in invs if i.get("id") == inv_id1 or i.get("idempotency_key") == key
+        ]
         assert len(matching_runs) == 1
 
 
@@ -292,7 +325,7 @@ async def test_run_duration_persists_identically_across_reads():
             json={
                 "service_name": "scenario_a_missing_env",
                 "idempotency_key": key,
-            }
+            },
         )
         assert resp.status_code == 200
         diag_data = resp.json()
@@ -341,7 +374,9 @@ async def test_openapi_docs_contain_no_duplicate_api_prefixes():
         schema = res.json()
         paths = schema.get("paths", {}).keys()
         for p in paths:
-            assert not p.startswith("/api/api/"), f"Found duplicate prefix in OpenAPI path: {p}"
+            assert not p.startswith(
+                "/api/api/"
+            ), f"Found duplicate prefix in OpenAPI path: {p}"
         assert "/api/v1/diagnose" in paths
         assert "/api/v1/verify" in paths
 
@@ -354,7 +389,10 @@ async def test_repeat_scenario_run_is_marked_cached_with_original_duration():
         # Run 1: Initial execution
         resp1 = await client.post(
             "/api/v1/diagnose",
-            json={"service_name": "scenario_a_missing_env", "idempotency_key": f"run1-{time.time()}"}
+            json={
+                "service_name": "scenario_a_missing_env",
+                "idempotency_key": f"run1-{time.time()}",
+            },
         )
         assert resp1.status_code == 200
         data1 = resp1.json()
@@ -364,7 +402,10 @@ async def test_repeat_scenario_run_is_marked_cached_with_original_duration():
         # Run 2: Repeat execution (different idempotency key)
         resp2 = await client.post(
             "/api/v1/diagnose",
-            json={"service_name": "scenario_a_missing_env", "idempotency_key": f"run2-{time.time()}"}
+            json={
+                "service_name": "scenario_a_missing_env",
+                "idempotency_key": f"run2-{time.time()}",
+            },
         )
         assert resp2.status_code == 200
         data2 = resp2.json()
@@ -397,14 +438,16 @@ async def test_repeat_scenario_run_is_marked_cached_with_original_duration():
 @pytest.mark.asyncio
 async def test_custom_log_redis_keyerror_patch_proposal():
     """Test that custom log KeyError 'REDIS_URL' proposes REDIS_URL patch, NOT hardcoded DATABASE_URL."""
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         # Step 1: Submit custom log with REDIS_URL KeyError
         diag_resp = await client.post(
             "/api/v1/diagnose",
             json={
                 "service_name": "Custom: auth-service",
                 "logs": "Traceback (most recent call last):\n  File 'app/config.py', line 12, in <module>\n    REDIS_URL = os.environ['REDIS_URL']\nKeyError: 'REDIS_URL'",
-            }
+            },
         )
         assert diag_resp.status_code == 200
         diag_data = diag_resp.json()
@@ -429,7 +472,7 @@ async def test_custom_log_redis_keyerror_patch_proposal():
                 "scenario_name": "Custom: auth-service",
                 "investigation_id": inv_id,
                 "user_approved": True,
-            }
+            },
         )
         assert verify_resp.status_code == 200
         verify_data = verify_resp.json()
@@ -443,14 +486,16 @@ async def test_custom_log_redis_keyerror_patch_proposal():
 @pytest.mark.asyncio
 async def test_cache_worker_redis_keyerror_patch_and_verification():
     """Verify that cache-worker with REDIS_URL KeyError gets REDIS_URL=redis://localhost:6379/0 patch and passes verification."""
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         # Step 1: Diagnose cache-worker with REDIS_URL KeyError
         diag_resp = await client.post(
             "/api/v1/diagnose",
             json={
                 "service_name": "cache-worker",
                 "logs": "Traceback (most recent call last):\n  File 'worker.py', line 15, in <module>\n    redis_client = redis.from_url(os.environ['REDIS_URL'])\nKeyError: 'REDIS_URL'",
-            }
+            },
         )
         assert diag_resp.status_code == 200
         diag_data = diag_resp.json()
@@ -474,7 +519,7 @@ async def test_cache_worker_redis_keyerror_patch_and_verification():
                 "scenario_name": "cache-worker",
                 "investigation_id": inv_id,
                 "user_approved": True,
-            }
+            },
         )
         assert verify_resp.status_code == 200
         verify_data = verify_resp.json()
@@ -486,13 +531,15 @@ async def test_cache_worker_redis_keyerror_patch_and_verification():
 @pytest.mark.asyncio
 async def test_orders_api_econnrefused_postgres_rejects_wrong_port_mapping_patch():
     """Verify orders-api ECONNREFUSED 127.0.0.1:5432 gets 96% Postgres diagnosis, and sandbox verification REJECTS the 8000:5000 -> 8000:8000 port-mapping patch."""
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         diag_resp = await client.post(
             "/api/v1/diagnose",
             json={
                 "service_name": "orders-api",
                 "logs": "Error: connect ECONNREFUSED 127.0.0.1:5432\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1555:16)\nFATAL: PostgreSQL connection failed on 127.0.0.1:5432",
-            }
+            },
         )
         assert diag_resp.status_code == 200
         diag_data = diag_resp.json()
@@ -520,13 +567,16 @@ async def test_orders_api_econnrefused_postgres_rejects_wrong_port_mapping_patch
                 "scenario_name": "orders-api",
                 "investigation_id": inv_id,
                 "user_approved": True,
-            }
+            },
         )
         assert verify_resp.status_code == 200
         verify_data = verify_resp.json()
         assert verify_data["status"] == "verification_failed"
         assert verify_data["failure_evidence"] is not None
-        assert "does not resolve" in verify_data["failure_evidence"] or "does not address" in verify_data["failure_evidence"]
+        assert (
+            "does not resolve" in verify_data["failure_evidence"]
+            or "does not address" in verify_data["failure_evidence"]
+        )
 
         # Check /investigations record reflects FAILED_FIX, not VERIFIED_FIX
         inv_res = await client.get(f"/investigations/{inv_id}")
@@ -539,15 +589,20 @@ async def test_orders_api_econnrefused_postgres_rejects_wrong_port_mapping_patch
 @pytest.mark.asyncio
 async def test_scenario_d_insufficient_evidence_status_consistency():
     """Verify Scenario D outputs insufficient_evidence status and outcome consistently, without safe patch offering."""
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         resp = await client.post(
             "/api/v1/diagnose",
-            json={"service_name": "scenario_d_insufficient_evidence"}
+            json={"service_name": "scenario_d_insufficient_evidence"},
         )
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "insufficient_evidence"
-        assert data.get("has_safe_patch") is None or data.get("has_safe_patch") is not False
+        assert (
+            data.get("has_safe_patch") is None
+            or data.get("has_safe_patch") is not False
+        )
         inv_id = data["investigation_id"]
 
         inv_resp = await client.get(f"/investigations/{inv_id}")
@@ -561,18 +616,23 @@ async def test_cached_scenario_a_preserves_exact_first_run_compute_duration(tmp_
     """Verify cached Scenario A reports the exact original_duration_ms from the first run, never overwriting with 12010ms."""
     from backend.app.api.routes import (
         DIAGNOSTIC_CACHE,
-        INVESTIGATIONS_DB,
         INVESTIGATION_DIAGNOSES,
-        get_diagnostic_cache_key,
-        _save_persisted_state,
+        INVESTIGATIONS_DB,
         _load_persisted_state,
+        _save_persisted_state,
+        get_diagnostic_cache_key,
     )
 
     DIAGNOSTIC_CACHE.clear()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         resp1 = await client.post(
             "/api/v1/diagnose",
-            json={"service_name": "scenario_a_missing_env", "idempotency_key": f"exact-dur-1-{time.time()}"}
+            json={
+                "service_name": "scenario_a_missing_env",
+                "idempotency_key": f"exact-dur-1-{time.time()}",
+            },
         )
         assert resp1.status_code == 200
         data1 = resp1.json()
@@ -581,7 +641,10 @@ async def test_cached_scenario_a_preserves_exact_first_run_compute_duration(tmp_
 
         resp2 = await client.post(
             "/api/v1/diagnose",
-            json={"service_name": "scenario_a_missing_env", "idempotency_key": f"exact-dur-2-{time.time()}"}
+            json={
+                "service_name": "scenario_a_missing_env",
+                "idempotency_key": f"exact-dur-2-{time.time()}",
+            },
         )
         assert resp2.status_code == 200
         data2 = resp2.json()
@@ -605,8 +668,44 @@ async def test_cached_scenario_a_preserves_exact_first_run_compute_duration(tmp_
         assert DIAGNOSTIC_CACHE[cache_key]["original_duration_ms"] == first_run_ms
 
 
+@pytest.mark.asyncio
+async def test_async_diagnostic_job_and_polling():
+    """Verify async_mode=True returns running status immediately and status endpoint can be polled."""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # 1. Start async job
+        start_resp = await client.post(
+            "/api/v1/diagnose",
+            json={"service_name": "scenario_a_missing_env", "async_mode": True},
+        )
+        assert start_resp.status_code == 200
+        start_data = start_resp.json()
+        assert "investigation_id" in start_data
+        inv_id = start_data["investigation_id"]
+
+        # 2. Poll status endpoint until completed (up to 10s)
+        completed = False
+        for _ in range(100):
+            status_resp = await client.get(f"/api/v1/diagnose/status/{inv_id}")
+            assert status_resp.status_code == 200
+            status_data = status_resp.json()
+            if status_data["status"] == "completed":
+                assert "diagnosis" in status_data
+                diag = status_data["diagnosis"]
+                assert diag["status"] == "diagnosis_available"
+                assert len(diag["hypotheses"]) > 0
+                completed = True
+                break
+            await asyncio.sleep(0.1)
+        assert completed is True
 
 
+@pytest.mark.asyncio
+async def test_inv_id_monotonicity_with_client_last_id():
+    """Verify run IDs strictly increase beyond client localStorage IDs across restarts."""
+    from backend.app.api.routes import _generate_next_inv_id
 
-
-
+    next_id = _generate_next_inv_id(client_last_id="inv-0999")
+    num_part = int(next_id.split("-")[1])
+    assert num_part >= 1000

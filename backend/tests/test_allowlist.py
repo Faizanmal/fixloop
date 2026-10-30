@@ -1,6 +1,5 @@
 """Security tests verifying that DiagnosticAllowlist prevents command injection and unauthorized actions."""
 
-import pytest
 from backend.app.core.models import DiagnosticProbeType
 from backend.app.evidence.allowlist import DiagnosticAllowlist
 
@@ -57,7 +56,7 @@ def test_block_unauthorized_file_extensions():
 
 
 def test_valid_file_inspection():
-    valid, msg = DiagnosticAllowlist.validate_probe(
+    valid, _msg = DiagnosticAllowlist.validate_probe(
         DiagnosticProbeType.READ_TARGET_FILE,
         target="docker-compose.yml",
         parameters={},
@@ -66,7 +65,7 @@ def test_valid_file_inspection():
 
 
 def test_valid_env_key_check():
-    valid, msg = DiagnosticAllowlist.validate_probe(
+    valid, _msg = DiagnosticAllowlist.validate_probe(
         DiagnosticProbeType.CHECK_ENV_KEY_EXISTS,
         target="DATABASE_URL",
         parameters={"key": "DATABASE_URL"},
@@ -75,7 +74,7 @@ def test_valid_env_key_check():
 
 
 def test_invalid_env_key_pattern():
-    valid, msg = DiagnosticAllowlist.validate_probe(
+    valid, _msg = DiagnosticAllowlist.validate_probe(
         DiagnosticProbeType.CHECK_ENV_KEY_EXISTS,
         target="KEY`whoami`",
         parameters={"key": "KEY`whoami`"},

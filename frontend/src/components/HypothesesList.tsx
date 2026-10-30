@@ -427,7 +427,7 @@ export function HypothesesList({
             ) : panelConfig.isInsufficient ? (
               <div className="inline-flex items-center gap-1.5 rounded-lg border border-purple-800/60 bg-purple-950/40 px-3 py-1.5 text-xs font-medium text-purple-300 shrink-0">
                 <Shield className="h-3.5 w-3.5" />
-                <span>Patch Blocked (Insufficient Evidence)</span>
+                <span>Insufficient Evidence (Patch Blocked)</span>
               </div>
             ) : (
               <div className="inline-flex items-center gap-1.5 rounded-lg border border-purple-800/60 bg-purple-950/40 px-3 py-1.5 text-xs font-medium text-purple-300 shrink-0">

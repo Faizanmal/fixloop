@@ -11,23 +11,24 @@ Executes a bounded, hypothesis-driven loop:
 """
 
 from __future__ import annotations
+
 import asyncio
-from datetime import datetime, timezone
-from enum import Enum
 import hashlib
 import json
 import logging
 import math
 import re
 import time
+from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from backend.app.core.models import (
     ContradictionReport,
     DiagnoseHypothesis,
-    DiagnoseResponse,
     DiagnosisStatus,
     EvidenceItem,
     EvidenceRecord,
@@ -35,7 +36,6 @@ from backend.app.core.models import (
     HypothesisCategory,
     RecommendTest,
     VerificationStatus,
-    utc_now,
 )
 from backend.app.evidence.collectors import EvidenceCollectorHub
 from backend.app.evidence.tools import (
@@ -44,7 +44,7 @@ from backend.app.evidence.tools import (
     DiagnosticToolResult,
 )
 from backend.app.llm.client import NebiusLLMClient
-from backend.app.llm.exceptions import NebiusQuotaError, NebiusBillingError
+from backend.app.llm.exceptions import NebiusBillingError, NebiusQuotaError
 from backend.app.llm.trimmer import EvidenceTrimmer
 
 logger = logging.getLogger("fixloop.engine")
@@ -52,6 +52,7 @@ logger = logging.getLogger("fixloop.engine")
 
 class InvestigationState(str, Enum):
     """Explicit lifecycle states of FixLoop's autonomous diagnostic investigation loop."""
+
     PENDING = "PENDING"
     INITIALIZING = "INITIALIZING"
     COLLECTING_EVIDENCE = "COLLECTING_EVIDENCE"
@@ -66,16 +67,57 @@ class InvestigationState(str, Enum):
     FAILED = "FAILED"
 
 
-VALID_STATE_TRANSITIONS: Dict[InvestigationState, Set[InvestigationState]] = {
-    InvestigationState.PENDING: {InvestigationState.INITIALIZING, InvestigationState.COLLECTING_EVIDENCE, InvestigationState.CANCELLED, InvestigationState.FAILED},
-    InvestigationState.INITIALIZING: {InvestigationState.COLLECTING_EVIDENCE, InvestigationState.CANCELLED, InvestigationState.FAILED},
-    InvestigationState.COLLECTING_EVIDENCE: {InvestigationState.ANALYZING_FACTS, InvestigationState.CANCELLED, InvestigationState.FAILED},
-    InvestigationState.ANALYZING_FACTS: {InvestigationState.MODEL_INTERPRETATION, InvestigationState.HYPOTHESIS_FORMULATION, InvestigationState.CANCELLED, InvestigationState.FAILED},
-    InvestigationState.MODEL_INTERPRETATION: {InvestigationState.HYPOTHESIS_FORMULATION, InvestigationState.CANCELLED, InvestigationState.FAILED},
-    InvestigationState.HYPOTHESIS_FORMULATION: {InvestigationState.SELECTING_TEST, InvestigationState.CONCLUDED, InvestigationState.CANCELLED, InvestigationState.FAILED},
-    InvestigationState.SELECTING_TEST: {InvestigationState.EXECUTING_TEST, InvestigationState.CONCLUDED, InvestigationState.CANCELLED, InvestigationState.FAILED},
-    InvestigationState.EXECUTING_TEST: {InvestigationState.EVALUATING_RESULTS, InvestigationState.CANCELLED, InvestigationState.FAILED},
-    InvestigationState.EVALUATING_RESULTS: {InvestigationState.HYPOTHESIS_FORMULATION, InvestigationState.CONCLUDED, InvestigationState.CANCELLED, InvestigationState.FAILED},
+VALID_STATE_TRANSITIONS: dict[InvestigationState, set[InvestigationState]] = {
+    InvestigationState.PENDING: {
+        InvestigationState.INITIALIZING,
+        InvestigationState.COLLECTING_EVIDENCE,
+        InvestigationState.CANCELLED,
+        InvestigationState.FAILED,
+    },
+    InvestigationState.INITIALIZING: {
+        InvestigationState.COLLECTING_EVIDENCE,
+        InvestigationState.CANCELLED,
+        InvestigationState.FAILED,
+    },
+    InvestigationState.COLLECTING_EVIDENCE: {
+        InvestigationState.ANALYZING_FACTS,
+        InvestigationState.CANCELLED,
+        InvestigationState.FAILED,
+    },
+    InvestigationState.ANALYZING_FACTS: {
+        InvestigationState.MODEL_INTERPRETATION,
+        InvestigationState.HYPOTHESIS_FORMULATION,
+        InvestigationState.CANCELLED,
+        InvestigationState.FAILED,
+    },
+    InvestigationState.MODEL_INTERPRETATION: {
+        InvestigationState.HYPOTHESIS_FORMULATION,
+        InvestigationState.CANCELLED,
+        InvestigationState.FAILED,
+    },
+    InvestigationState.HYPOTHESIS_FORMULATION: {
+        InvestigationState.SELECTING_TEST,
+        InvestigationState.CONCLUDED,
+        InvestigationState.CANCELLED,
+        InvestigationState.FAILED,
+    },
+    InvestigationState.SELECTING_TEST: {
+        InvestigationState.EXECUTING_TEST,
+        InvestigationState.CONCLUDED,
+        InvestigationState.CANCELLED,
+        InvestigationState.FAILED,
+    },
+    InvestigationState.EXECUTING_TEST: {
+        InvestigationState.EVALUATING_RESULTS,
+        InvestigationState.CANCELLED,
+        InvestigationState.FAILED,
+    },
+    InvestigationState.EVALUATING_RESULTS: {
+        InvestigationState.HYPOTHESIS_FORMULATION,
+        InvestigationState.CONCLUDED,
+        InvestigationState.CANCELLED,
+        InvestigationState.FAILED,
+    },
     InvestigationState.CONCLUDED: set(),
     InvestigationState.CANCELLED: set(),
     InvestigationState.FAILED: set(),
@@ -84,11 +126,11 @@ VALID_STATE_TRANSITIONS: Dict[InvestigationState, Set[InvestigationState]] = {
 
 class InvalidStateTransitionError(Exception):
     """Raised when an illegal investigation state transition is attempted."""
-    pass
 
 
 class InvestigationEventType(str, Enum):
     """Types of events recorded in FixLoop's comprehensive event log."""
+
     STATE_TRANSITION = "STATE_TRANSITION"
     EVIDENCE_COLLECTED = "EVIDENCE_COLLECTED"
     FACTS_ANALYZED = "FACTS_ANALYZED"
@@ -112,14 +154,17 @@ class InvestigationEventType(str, Enum):
 
 class InvestigationEvent(BaseModel):
     """Immutable event record in FixLoop's audit history."""
+
     id: str
-    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     event_type: InvestigationEventType
     state: InvestigationState
-    payload: Dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
-def normalize_test_signature(tool_name: str, target: str, parameters: Optional[Dict[str, Any]] = None) -> str:
+def normalize_test_signature(
+    tool_name: str, target: str, parameters: dict[str, Any] | None = None
+) -> str:
     """Computes a normalized, canonical string signature for duplicate test detection."""
     norm_target = str(target).strip().lower()
     if norm_target != "/" and norm_target.endswith("/"):
@@ -130,10 +175,18 @@ def normalize_test_signature(tool_name: str, target: str, parameters: Optional[D
 
 class DiagnosticBudget(BaseModel):
     """Enforces upper limits on diagnostic execution to prevent infinite loops and runaway costs."""
-    max_steps: int = Field(default=4, description="Maximum number of active probes allowed")
+
+    max_steps: int = Field(
+        default=4, description="Maximum number of active probes allowed"
+    )
     max_cost: int = Field(default=10, description="Total cost budget for active probes")
-    timeout_seconds: float = Field(default=30.0, description="Overall engine timeout in seconds")
-    max_tokens: int = Field(default=4000, description="Per-investigation maximum token budget for model inference")
+    timeout_seconds: float = Field(
+        default=30.0, description="Overall engine timeout in seconds"
+    )
+    max_tokens: int = Field(
+        default=4000,
+        description="Per-investigation maximum token budget for model inference",
+    )
     tokens_used: int = 0
     used_cost: int = 0
     steps_taken: int = 0
@@ -151,7 +204,9 @@ class DiagnosticBudget(BaseModel):
             return False
         if self.consecutive_failures >= self.max_consecutive_failures:
             return False
-        return (self.steps_taken < self.max_steps) and ((self.used_cost + tool_cost) <= self.max_cost)
+        return (self.steps_taken < self.max_steps) and (
+            (self.used_cost + tool_cost) <= self.max_cost
+        )
 
     def can_afford_tokens(self, estimated_tokens: int = 200) -> bool:
         """Checks if the token budget can accommodate an additional inference call."""
@@ -175,10 +230,11 @@ class DiagnosticBudget(BaseModel):
 
 class SelectedTestRecord(BaseModel):
     """Record of why a test was selected based on EIG, safety, cost, and execution duration."""
+
     test_id: str
     tool_name: str
     target: str
-    parameters: Dict[str, Any] = Field(default_factory=dict)
+    parameters: dict[str, Any] = Field(default_factory=dict)
     rationale: str
     expected_information_gain: float
     cost: int
@@ -189,42 +245,44 @@ class SelectedTestRecord(BaseModel):
 
 class AuditLog(BaseModel):
     """Auditable log of the entire diagnostic progression."""
-    observations: List[Dict[str, Any]] = Field(default_factory=list)
-    hypotheses_history: List[List[Dict[str, Any]]] = Field(default_factory=list)
-    selected_tests: List[SelectedTestRecord] = Field(default_factory=list)
-    test_results: List[DiagnosticToolResult] = Field(default_factory=list)
+
+    observations: list[dict[str, Any]] = Field(default_factory=list)
+    hypotheses_history: list[list[dict[str, Any]]] = Field(default_factory=list)
+    selected_tests: list[SelectedTestRecord] = Field(default_factory=list)
+    test_results: list[DiagnosticToolResult] = Field(default_factory=list)
     current_uncertainty: float = 1.0
-    contradictions: List[ContradictionReport] = Field(default_factory=list)
-    entropy_history: List[float] = Field(default_factory=list)
+    contradictions: list[ContradictionReport] = Field(default_factory=list)
+    entropy_history: list[float] = Field(default_factory=list)
     stop_reason: str = "Investigation in progress"
     current_state: InvestigationState = InvestigationState.PENDING
-    events: List[InvestigationEvent] = Field(default_factory=list)
+    events: list[InvestigationEvent] = Field(default_factory=list)
 
 
 class DiagnosticEngineResult(BaseModel):
     """Structured outcome from the diagnostic engine investigation."""
+
     status: DiagnosisStatus
     summary: str
-    hypotheses: List[DiagnoseHypothesis]
-    evidence: List[EvidenceRecord]
-    recommended_tests: List[RecommendTest]
-    missing_information: List[str]
+    hypotheses: list[DiagnoseHypothesis]
+    evidence: list[EvidenceRecord]
+    recommended_tests: list[RecommendTest]
+    missing_information: list[str]
     confidence: float
     next_action: str
     budget: DiagnosticBudget
     audit_log: AuditLog
     uncertainty: float = 0.0
-    contradictions: List[ContradictionReport] = Field(default_factory=list)
+    contradictions: list[ContradictionReport] = Field(default_factory=list)
     current_state: InvestigationState = InvestigationState.CONCLUDED
-    events: List[InvestigationEvent] = Field(default_factory=list)
+    events: list[InvestigationEvent] = Field(default_factory=list)
 
 
 class DeterministicFactAnalyzer:
     """Applies deterministic logic to establish ground-truth facts from collectors."""
 
     @staticmethod
-    def analyze_facts(evidence: List[EvidenceItem]) -> Dict[str, Any]:
-        facts: Dict[str, Any] = {
+    def analyze_facts(evidence: list[EvidenceItem]) -> dict[str, Any]:
+        facts: dict[str, Any] = {
             "explicit_missing_env": None,
             "configured_healthcheck": None,
             "actual_source_routes": [],
@@ -245,34 +303,61 @@ class DeterministicFactAnalyzer:
         for item in evidence:
             # 1. Check for explicit missing env in logs
             if item.type == EvidenceType.LOGS:
-                if re.search(r"(started successfully|running on http|listening on|uvicorn running|application startup complete)", item.content, re.IGNORECASE):
+                if re.search(
+                    r"(started successfully|running on http|listening on|uvicorn running|application startup complete)",
+                    item.content,
+                    re.IGNORECASE,
+                ):
                     facts["normal_startup_logged"] = True
 
                 m = re.search(r"KeyError:\s*['\"]([A-Z0-9_]+)['\"]", item.content)
                 if m:
                     facts["explicit_missing_env"] = m.group(1)
-                m2 = re.search(r"Required environment variable\s*['\"]([A-Z0-9_]+)['\"]\s*is missing", item.content, re.IGNORECASE)
+                m2 = re.search(
+                    r"Required environment variable\s*['\"]([A-Z0-9_]+)['\"]\s*is missing",
+                    item.content,
+                    re.IGNORECASE,
+                )
                 if m2:
                     facts["explicit_missing_env"] = m2.group(1)
 
-                if "Connection reset by peer from external gateway" in item.content or "Upstream connection" in item.content and "timed out" in item.content:
+                if (
+                    "Connection reset by peer from external gateway" in item.content
+                    or "Upstream connection" in item.content
+                    and "timed out" in item.content
+                ):
                     facts["external_outage_detected"] = True
 
-                if "RATE_LIMIT_BURST" in item.content and "must be integer" in item.content:
+                if (
+                    "RATE_LIMIT_BURST" in item.content
+                    and "must be integer" in item.content
+                ):
                     facts["configuration_regression"] = True
 
-                if "redis" in item.content.lower() and ("connectionrefused" in item.content.lower() or "connection refused" in item.content.lower()):
+                if "redis" in item.content.lower() and (
+                    "connectionrefused" in item.content.lower()
+                    or "connection refused" in item.content.lower()
+                ):
                     has_redis_error_in_logs = True
 
             # 2. Check Docker Inspect
             elif item.type == EvidenceType.DOCKER_INSPECT:
                 if "health_status" in item.metadata:
                     facts["container_health_status"] = item.metadata["health_status"]
-                elif '"Status": "unhealthy"' in item.content or '"health_status": "unhealthy"' in item.content or 'unhealthy' in item.content.lower():
+                elif (
+                    '"Status": "unhealthy"' in item.content
+                    or '"health_status": "unhealthy"' in item.content
+                    or "unhealthy" in item.content.lower()
+                ):
                     facts["container_health_status"] = "unhealthy"
                 if "exit_code" in item.metadata:
                     facts["container_exit_code"] = item.metadata["exit_code"]
-                if item.metadata.get("oom_killed") or item.metadata.get("exit_code") == 137 or '"OOMKilled": true' in item.content or '"ExitCode": 137' in item.content:
+                if (
+                    item.metadata.get("oom_killed")
+                    or item.metadata.get("exit_code") == 137
+                    or '"OOMKilled": true' in item.content
+                    or '"ExitCode": 137' in item.content
+                ):
                     facts["oom_killed"] = True
 
             # 3. Check Compose
@@ -284,7 +369,9 @@ class DeterministicFactAnalyzer:
                         test_str = " ".join(test_cmd)
                     else:
                         test_str = str(test_cmd)
-                    m = re.search(r"http://localhost:(\d+)(/[a-zA-Z0-9_\-\/]+)", test_str)
+                    m = re.search(
+                        r"http://localhost:(\d+)(/[a-zA-Z0-9_\-\/]+)", test_str
+                    )
                     if m:
                         facts["configured_healthcheck"] = {
                             "port": int(m.group(1)),
@@ -295,17 +382,26 @@ class DeterministicFactAnalyzer:
                 for p in ports:
                     if isinstance(p, str) and ":" in p:
                         host_p, cnt_p = p.split(":", 1)
-                        facts["compose_port_mappings"].append({
-                            "host_port": int(host_p),
-                            "container_port": int(cnt_p),
-                        })
+                        facts["compose_port_mappings"].append(
+                            {
+                                "host_port": int(host_p),
+                                "container_port": int(cnt_p),
+                            }
+                        )
 
-                if "REDIS_ENABLED=false" in item.content or "REDIS_ENABLED: 'false'" in item.content or 'REDIS_ENABLED: "false"' in item.content:
+                if (
+                    "REDIS_ENABLED=false" in item.content
+                    or "REDIS_ENABLED: 'false'" in item.content
+                    or 'REDIS_ENABLED: "false"' in item.content
+                ):
                     redis_disabled_in_config = True
 
             # 4. Check Environment Variables
             elif item.type == EvidenceType.ENVIRONMENT:
-                if "REDIS_ENABLED" in item.content and ("false" in item.content.lower() or "[PRESENT: false]" in item.content.lower()):
+                if "REDIS_ENABLED" in item.content and (
+                    "false" in item.content.lower()
+                    or "[PRESENT: false]" in item.content.lower()
+                ):
                     redis_disabled_in_config = True
 
             # 5. Check Source Code
@@ -325,8 +421,10 @@ class ContradictionDetector:
     """Detects factual contradictions between logs, container state, and configuration."""
 
     @staticmethod
-    def detect_contradictions(evidence: List[EvidenceItem], facts: Dict[str, Any]) -> List[ContradictionReport]:
-        contradictions: List[ContradictionReport] = []
+    def detect_contradictions(
+        evidence: list[EvidenceItem], facts: dict[str, Any]
+    ) -> list[ContradictionReport]:
+        contradictions: list[ContradictionReport] = []
 
         log_items = [e for e in evidence if e.type == EvidenceType.LOGS]
         inspect_items = [e for e in evidence if e.type == EvidenceType.DOCKER_INSPECT]
@@ -342,11 +440,21 @@ class ContradictionDetector:
         health_status = facts.get("container_health_status")
         logs_text = "\n".join([e.content for e in log_items])
         has_normal_startup_log = facts.get("normal_startup_logged") or bool(
-            re.search(r"(started successfully|running on http|listening on|uvicorn running|application startup complete)", logs_text, re.IGNORECASE)
+            re.search(
+                r"(started successfully|running on http|listening on|uvicorn running|application startup complete)",
+                logs_text,
+                re.IGNORECASE,
+            )
         )
-        has_log_errors = any("error" in e.metadata and e.metadata.get("has_errors") for e in log_items)
+        has_log_errors = any(
+            "error" in e.metadata and e.metadata.get("has_errors") for e in log_items
+        )
 
-        if health_status == "unhealthy" and has_normal_startup_log and not has_log_errors:
+        if (
+            health_status == "unhealthy"
+            and has_normal_startup_log
+            and not has_log_errors
+        ):
             contradictions.append(
                 ContradictionReport(
                     id="contra-log-healthy-state-unhealthy",
@@ -354,7 +462,9 @@ class ContradictionDetector:
                     source_a=log_items[0].source if log_items else "application_logs",
                     evidence_id_a=log_id,
                     claim_b="Docker container health status is 'unhealthy'",
-                    source_b=inspect_items[0].source if inspect_items else "docker_inspect",
+                    source_b=(
+                        inspect_items[0].source if inspect_items else "docker_inspect"
+                    ),
                     evidence_id_b=inspect_id,
                     description="Contradiction between log tail and container healthcheck: server logged successful boot, but Docker probe failed.",
                     severity="HIGH",
@@ -380,7 +490,9 @@ class ContradictionDetector:
             )
 
         # 3. OOM Killed vs Logged Database Timeout
-        if facts.get("oom_killed") and ("timeout" in logs_text.lower() or "connection" in logs_text.lower()):
+        if facts.get("oom_killed") and (
+            "timeout" in logs_text.lower() or "connection" in logs_text.lower()
+        ):
             contradictions.append(
                 ContradictionReport(
                     id="contra-oom-vs-timeout-log",
@@ -445,7 +557,7 @@ class UncertaintyEstimator:
     """Computes information-theoretic uncertainty (Shannon entropy and confidence margin)."""
 
     @staticmethod
-    def calculate_entropy(probabilities: List[float]) -> float:
+    def calculate_entropy(probabilities: list[float]) -> float:
         """Computes Shannon entropy in bits: H = -sum(p * log2(p))."""
         if not probabilities:
             return 0.0
@@ -457,10 +569,10 @@ class UncertaintyEstimator:
 
     @staticmethod
     def estimate_uncertainty(
-        hypotheses: List[DiagnoseHypothesis],
-        facts: Dict[str, Any],
+        hypotheses: list[DiagnoseHypothesis],
+        facts: dict[str, Any],
         has_conclusive_evidence: bool = False,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """Calculates calibrated uncertainty in [0.0, 1.0] and Shannon entropy."""
         if not hypotheses:
             return 1.0, 0.0
@@ -479,7 +591,18 @@ class UncertaintyEstimator:
         elif facts.get("external_outage_detected"):
             uncertainty = max(0.40, round(1.0 - top_conf, 4))
         elif top_conf < 0.90:
-            uncertainty = min(1.0, max(0.15, round(0.5 * (1.0 - top_conf) + 0.3 * norm_entropy + 0.2 * (1.0 - margin), 4)))
+            uncertainty = min(
+                1.0,
+                max(
+                    0.15,
+                    round(
+                        0.5 * (1.0 - top_conf)
+                        + 0.3 * norm_entropy
+                        + 0.2 * (1.0 - margin),
+                        4,
+                    ),
+                ),
+            )
         else:
             uncertainty = max(0.01, round(1.0 - top_conf, 4))
 
@@ -493,22 +616,26 @@ class DiagnosticTestSelector:
     def compute_eig_and_utility(
         tool: BaseDiagnosticTool,
         target: str,
-        parameters: Dict[str, Any],
-        hypotheses: List[DiagnoseHypothesis],
+        parameters: dict[str, Any],
+        hypotheses: list[DiagnoseHypothesis],
         rationale: str,
-        p_success_given_hyp: List[float],
+        p_success_given_hyp: list[float],
         base_test_id: str,
-    ) -> Tuple[float, float, SelectedTestRecord]:
+    ) -> tuple[float, float, SelectedTestRecord]:
         """Calculates EIG and multi-attribute utility for a candidate probe."""
         if not hypotheses:
-            return 0.0, 0.0, SelectedTestRecord(
-                test_id=base_test_id,
-                tool_name=tool.tool_name,
-                target=target,
-                parameters=parameters,
-                rationale=rationale,
-                expected_information_gain=0.0,
-                cost=tool.cost,
+            return (
+                0.0,
+                0.0,
+                SelectedTestRecord(
+                    test_id=base_test_id,
+                    tool_name=tool.tool_name,
+                    target=target,
+                    parameters=parameters,
+                    rationale=rationale,
+                    expected_information_gain=0.0,
+                    cost=tool.cost,
+                ),
             )
 
         # Current prior distribution
@@ -520,16 +647,24 @@ class DiagnosticTestSelector:
 
         # Conditional probabilities of outcome = SUCCESS
         # and outcome = FAILURE
-        p_success = sum(norm_priors[i] * p_success_given_hyp[i] for i in range(len(hypotheses)))
+        p_success = sum(
+            norm_priors[i] * p_success_given_hyp[i] for i in range(len(hypotheses))
+        )
         p_success = max(0.001, min(0.999, p_success))
         p_fail = 1.0 - p_success
 
         # Posterior for SUCCESS
-        post_success = [norm_priors[i] * p_success_given_hyp[i] / p_success for i in range(len(hypotheses))]
+        post_success = [
+            norm_priors[i] * p_success_given_hyp[i] / p_success
+            for i in range(len(hypotheses))
+        ]
         h_post_success = UncertaintyEstimator.calculate_entropy(post_success)
 
         # Posterior for FAILURE
-        post_fail = [norm_priors[i] * (1.0 - p_success_given_hyp[i]) / p_fail for i in range(len(hypotheses))]
+        post_fail = [
+            norm_priors[i] * (1.0 - p_success_given_hyp[i]) / p_fail
+            for i in range(len(hypotheses))
+        ]
         h_post_fail = UncertaintyEstimator.calculate_entropy(post_fail)
 
         # Expected posterior entropy
@@ -567,14 +702,14 @@ class DiagnosticEngine:
 
     def __init__(
         self,
-        tool_registry: Optional[DiagnosticToolRegistry] = None,
-        llm_client: Optional[NebiusLLMClient] = None,
+        tool_registry: DiagnosticToolRegistry | None = None,
+        llm_client: NebiusLLMClient | None = None,
     ):
         self.tools = tool_registry or DiagnosticToolRegistry()
         self.llm_client = llm_client or NebiusLLMClient()
         self._cancellation_requested = False
 
-    def request_cancellation(self, cancellation_token: Optional[Any] = None) -> None:
+    def request_cancellation(self, cancellation_token: Any | None = None) -> None:
         """Signals graceful cancellation of the running investigation."""
         self._cancellation_requested = True
         if cancellation_token is not None:
@@ -583,7 +718,7 @@ class DiagnosticEngine:
             elif hasattr(cancellation_token, "set"):
                 cancellation_token.set()
 
-    def is_cancellation_requested(self, cancellation_token: Optional[Any] = None) -> bool:
+    def is_cancellation_requested(self, cancellation_token: Any | None = None) -> bool:
         """Checks if cancellation has been requested via token or internal flag."""
         if self._cancellation_requested:
             return True
@@ -599,7 +734,7 @@ class DiagnosticEngine:
         audit: AuditLog,
         event_type: InvestigationEventType,
         state: InvestigationState,
-        payload: Optional[Dict[str, Any]] = None,
+        payload: dict[str, Any] | None = None,
     ) -> InvestigationEvent:
         """Appends an immutable event to the audit event log."""
         event = InvestigationEvent(
@@ -615,8 +750,8 @@ class DiagnosticEngine:
         self,
         audit: AuditLog,
         target_state: InvestigationState,
-        reason: Optional[str] = None,
-        payload: Optional[Dict[str, Any]] = None,
+        reason: str | None = None,
+        payload: dict[str, Any] | None = None,
     ) -> InvestigationState:
         """Validates and executes an explicit state transition with complete audit trail."""
         current = audit.current_state
@@ -640,7 +775,9 @@ class DiagnosticEngine:
             ev_payload["reason"] = reason
         if payload:
             ev_payload.update(payload)
-        self._record_event(audit, InvestigationEventType.STATE_TRANSITION, target_state, ev_payload)
+        self._record_event(
+            audit, InvestigationEventType.STATE_TRANSITION, target_state, ev_payload
+        )
         return target_state
 
     async def verify_proposed_fix(
@@ -650,12 +787,15 @@ class DiagnosticEngine:
         user_approved: bool = False,
     ) -> Any:
         """Verifies a proposed fix in an isolated disposable sandbox.
-        
+
         Strictly requires conclusive diagnosis status (confidence >= 0.90) and actual
         empirical verification test execution (exit code 0 and passing assertions in DisposableSandbox)
         before marking a fix as verified.
         """
-        from backend.app.sandbox.verifier import ControlledVerificationPipeline, VerificationReport
+        from backend.app.sandbox.verifier import (
+            ControlledVerificationPipeline,
+            VerificationReport,
+        )
 
         if hypothesis.confidence < 0.90:
             return VerificationReport(
@@ -684,22 +824,22 @@ class DiagnosticEngine:
     def collect_initial_evidence(
         self,
         project_root: Path,
-        logs_override: Optional[str] = None,
-        inspect_override: Optional[Dict[str, Any]] = None,
-    ) -> List[EvidenceItem]:
+        logs_override: str | None = None,
+        inspect_override: dict[str, Any] | None = None,
+    ) -> list[EvidenceItem]:
         """Convenience method to collect initial evidence from a project directory."""
         hub = EvidenceCollectorHub(project_root)
         return hub.collect_all_initial(logs_override, inspect_override)
 
     def generate_hypotheses_from_evidence(
         self,
-        evidence: List[EvidenceItem],
-        facts: Dict[str, Any],
-        executed_tests: List[DiagnosticToolResult],
-    ) -> Tuple[List[DiagnoseHypothesis], List[str], float]:
+        evidence: list[EvidenceItem],
+        facts: dict[str, Any],
+        executed_tests: list[DiagnosticToolResult],
+    ) -> tuple[list[DiagnoseHypothesis], list[str], float]:
         """Formulates or updates competing hypotheses based on deterministic facts, empirical evidence, and provenance."""
-        hypotheses: List[DiagnoseHypothesis] = []
-        missing_info: List[str] = []
+        hypotheses: list[DiagnoseHypothesis] = []
+        missing_info: list[str] = []
 
         # Find evidence items with provenance for referencing
         log_items = [e for e in evidence if e.type == EvidenceType.LOGS]
@@ -715,7 +855,11 @@ class DiagnosticEngine:
         # Case A: Missing Environment Variable
         if facts.get("explicit_missing_env"):
             var_name = facts["explicit_missing_env"]
-            env_probes = [t for t in executed_tests if t.tool_name == "check_env_key" and t.target == var_name]
+            env_probes = [
+                t
+                for t in executed_tests
+                if t.tool_name == "check_env_key" and t.target == var_name
+            ]
             env_confirmed_missing = any(not t.success for t in env_probes)
 
             # Hypothesis 1: Primary Missing Env
@@ -727,7 +871,14 @@ class DiagnosticEngine:
                     supporting_evidence=[
                         f"{log_id}: Explicit error KeyError on '{var_name}' [provenance: RUNTIME_OBSERVATION]",
                         f"{inspect_id}: Container exited with code {facts.get('container_exit_code', 1)} [provenance: CONTAINER_METADATA]",
-                    ] + ([f"ev-probe-env: Verified variable '{var_name}' is not defined in container environment [provenance: ACTIVE_PROBE]"] if env_confirmed_missing else []),
+                    ]
+                    + (
+                        [
+                            f"ev-probe-env: Verified variable '{var_name}' is not defined in container environment [provenance: ACTIVE_PROBE]"
+                        ]
+                        if env_confirmed_missing
+                        else []
+                    ),
                     contradicting_evidence=[],
                     confidence=0.98,
                     recommended_discriminating_test=f"check_env_key {var_name}",
@@ -739,7 +890,7 @@ class DiagnosticEngine:
                 DiagnoseHypothesis(
                     id="hyp-missing-env-2",
                     category=HypothesisCategory.EXTERNAL_DEPENDENCY,
-                    description=f"Database service or external dependency unreachable during connection initialization",
+                    description="Database service or external dependency unreachable during connection initialization",
                     supporting_evidence=[],
                     contradicting_evidence=[
                         f"{log_id}: Process aborted immediately on missing configuration key '{var_name}' prior to establishing network sockets [provenance: RUNTIME_OBSERVATION]"
@@ -749,7 +900,9 @@ class DiagnosticEngine:
                     uncertainty=0.02,
                 )
             )
-            uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(hypotheses, facts, has_conclusive_evidence=True)
+            uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(
+                hypotheses, facts, has_conclusive_evidence=True
+            )
             return hypotheses, missing_info, uncertainty
 
         # Case B: Healthcheck configuration vs App routes
@@ -762,8 +915,14 @@ class DiagnosticEngine:
             candidate_route = app_routes[0] if app_routes else "/healthz"
             http_probes = [t for t in executed_tests if t.tool_name == "probe_http"]
 
-            confirmed_route_probe = next((p for p in http_probes if p.success and p.metadata.get("status_code") == 200), None)
-            failed_route_probe = next((p for p in http_probes if not p.success and p.metadata.get("status_code") == 404), None)
+            confirmed_route_probe = next(
+                (
+                    p
+                    for p in http_probes
+                    if p.success and p.metadata.get("status_code") == 200
+                ),
+                None,
+            )
 
             if confirmed_route_probe:
                 # Active probe confirmed actual route returns 200!
@@ -800,7 +959,9 @@ class DiagnosticEngine:
                         uncertainty=0.02,
                     )
                 )
-                uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(hypotheses, facts, has_conclusive_evidence=True)
+                uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(
+                    hypotheses, facts, has_conclusive_evidence=True
+                )
                 return hypotheses, missing_info, uncertainty
             else:
                 # Before probe execution: Two competing hypotheses fit the initial evidence!
@@ -838,8 +999,12 @@ class DiagnosticEngine:
                         uncertainty=0.60,
                     )
                 )
-                missing_info.append(f"Empirical response status of '{candidate_route}' vs '{conf_endpoint}'")
-                uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(hypotheses, facts, has_conclusive_evidence=False)
+                missing_info.append(
+                    f"Empirical response status of '{candidate_route}' vs '{conf_endpoint}'"
+                )
+                uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(
+                    hypotheses, facts, has_conclusive_evidence=False
+                )
                 return hypotheses, missing_info, uncertainty
 
         # Case C: Port Mismatch
@@ -853,7 +1018,9 @@ class DiagnosticEngine:
 
             if cnt_p != act_p:
                 tcp_probes = [t for t in executed_tests if t.tool_name == "probe_tcp"]
-                act_port_open = any(p for p in tcp_probes if p.success and str(act_p) in p.target)
+                act_port_open = any(
+                    p for p in tcp_probes if p.success and str(act_p) in p.target
+                )
 
                 if act_port_open or executed_tests:
                     hypotheses.append(
@@ -886,7 +1053,9 @@ class DiagnosticEngine:
                             uncertainty=0.03,
                         )
                     )
-                    uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(hypotheses, facts, has_conclusive_evidence=True)
+                    uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(
+                        hypotheses, facts, has_conclusive_evidence=True
+                    )
                     return hypotheses, missing_info, uncertainty
                 else:
                     hypotheses.append(
@@ -918,8 +1087,12 @@ class DiagnosticEngine:
                             uncertainty=0.80,
                         )
                     )
-                    missing_info.append(f"Socket connectivity confirmation on internal port {act_p} vs {cnt_p}")
-                    uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(hypotheses, facts, has_conclusive_evidence=False)
+                    missing_info.append(
+                        f"Socket connectivity confirmation on internal port {act_p} vs {cnt_p}"
+                    )
+                    uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(
+                        hypotheses, facts, has_conclusive_evidence=False
+                    )
                     return hypotheses, missing_info, uncertainty
 
         # Case D: External Outage / Insufficient Evidence
@@ -955,8 +1128,12 @@ class DiagnosticEngine:
                     uncertainty=0.75,
                 )
             )
-            missing_info.append("External cloud provider network status and routing outside local container boundary")
-            uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(hypotheses, facts, has_conclusive_evidence=False)
+            missing_info.append(
+                "External cloud provider network status and routing outside local container boundary"
+            )
+            uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(
+                hypotheses, facts, has_conclusive_evidence=False
+            )
             return hypotheses, missing_info, uncertainty
 
         # Case E: Kernel OOM Killed (Misleading Logs)
@@ -994,7 +1171,9 @@ class DiagnosticEngine:
                     uncertainty=0.04,
                 )
             )
-            uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(hypotheses, facts, has_conclusive_evidence=True)
+            uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(
+                hypotheses, facts, has_conclusive_evidence=True
+            )
             return hypotheses, missing_info, uncertainty
 
         # Case F: Contradictory Evidence (Logs show Redis error, but config disables Redis)
@@ -1033,7 +1212,9 @@ class DiagnosticEngine:
                     uncertainty=0.08,
                 )
             )
-            uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(hypotheses, facts, has_conclusive_evidence=True)
+            uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(
+                hypotheses, facts, has_conclusive_evidence=True
+            )
             return hypotheses, missing_info, uncertainty
 
         # Case G: Configuration Regression
@@ -1067,7 +1248,9 @@ class DiagnosticEngine:
                     uncertainty=0.05,
                 )
             )
-            uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(hypotheses, facts, has_conclusive_evidence=True)
+            uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(
+                hypotheses, facts, has_conclusive_evidence=True
+            )
             return hypotheses, missing_info, uncertainty
 
         # Fallback / Generic
@@ -1096,25 +1279,31 @@ class DiagnosticEngine:
             )
         )
         missing_info.append("Detailed error stacktrace or debug inspection output")
-        uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(hypotheses, facts, has_conclusive_evidence=False)
+        uncertainty, _ = UncertaintyEstimator.estimate_uncertainty(
+            hypotheses, facts, has_conclusive_evidence=False
+        )
         return hypotheses, missing_info, uncertainty
 
     def select_next_test(
         self,
-        hypotheses: List[DiagnoseHypothesis],
-        facts: Dict[str, Any],
-        executed_tests: List[DiagnosticToolResult],
+        hypotheses: list[DiagnoseHypothesis],
+        facts: dict[str, Any],
+        executed_tests: list[DiagnosticToolResult],
         budget: DiagnosticBudget,
-        audit: Optional[AuditLog] = None,
-    ) -> Optional[SelectedTestRecord]:
+        audit: AuditLog | None = None,
+    ) -> SelectedTestRecord | None:
         """Selects the most discriminating next test based on Expected Information Gain (EIG), safety, cost, and time."""
-        executed_signatures: Set[str] = set()
+        executed_signatures: set[str] = set()
         for t in executed_tests:
-            executed_signatures.add(normalize_test_signature(t.tool_name, t.target, t.parameters))
-            executed_signatures.add(f"{t.tool_name}::{str(t.target).strip().lower()}::{{}}")
+            executed_signatures.add(
+                normalize_test_signature(t.tool_name, t.target, t.parameters)
+            )
+            executed_signatures.add(
+                f"{t.tool_name}::{str(t.target).strip().lower()}::{{}}"
+            )
             executed_signatures.add(f"{t.tool_name}::{t.target}")
 
-        candidates: List[Tuple[float, SelectedTestRecord]] = []
+        candidates: list[tuple[float, SelectedTestRecord]] = []
 
         # 1. Candidate: HTTP Probe on declared application routes (Healthcheck mismatch discrimination)
         hc = facts.get("configured_healthcheck")
@@ -1122,17 +1311,27 @@ class DiagnosticEngine:
         if hc and app_routes:
             health_matches = [r for r in app_routes if "health" in r.lower()]
             candidate_route = health_matches[0] if health_matches else app_routes[0]
-            sig = normalize_test_signature("probe_http", candidate_route, {"port": hc.get("port", 8000)})
+            sig = normalize_test_signature(
+                "probe_http", candidate_route, {"port": hc.get("port", 8000)}
+            )
             legacy_sig1 = f"probe_http::{candidate_route.strip().lower()}::{{}}"
             legacy_sig2 = f"probe_http::{candidate_route}"
 
-            if sig in executed_signatures or legacy_sig1 in executed_signatures or legacy_sig2 in executed_signatures:
+            if (
+                sig in executed_signatures
+                or legacy_sig1 in executed_signatures
+                or legacy_sig2 in executed_signatures
+            ):
                 if audit:
                     self._record_event(
                         audit,
                         InvestigationEventType.DUPLICATE_TEST_SKIPPED,
                         audit.current_state,
-                        {"tool": "probe_http", "target": candidate_route, "reason": "Duplicate test already executed in current investigation"},
+                        {
+                            "tool": "probe_http",
+                            "target": candidate_route,
+                            "reason": "Duplicate test already executed in current investigation",
+                        },
                     )
             else:
                 tool = self.tools.get_tool("probe_http")
@@ -1141,14 +1340,16 @@ class DiagnosticEngine:
                     test_id = f"test-probe-{len(executed_tests) + 1}"
                     rationale = f"Differentiate whether container health is failing due to server crash vs probing '{hc['endpoint']}' instead of '{candidate_route}'"
 
-                    eig, utility, record = DiagnosticTestSelector.compute_eig_and_utility(
-                        tool=tool,
-                        target=candidate_route,
-                        parameters={"port": hc.get("port", 8000)},
-                        hypotheses=hypotheses,
-                        rationale=rationale,
-                        p_success_given_hyp=p_success_given_hyp,
-                        base_test_id=test_id,
+                    _eig, utility, record = (
+                        DiagnosticTestSelector.compute_eig_and_utility(
+                            tool=tool,
+                            target=candidate_route,
+                            parameters={"port": hc.get("port", 8000)},
+                            hypotheses=hypotheses,
+                            rationale=rationale,
+                            p_success_given_hyp=p_success_given_hyp,
+                            base_test_id=test_id,
+                        )
                     )
                     candidates.append((utility, record))
 
@@ -1160,13 +1361,21 @@ class DiagnosticEngine:
             legacy_sig1 = f"probe_tcp::{str(p).strip().lower()}::{{}}"
             legacy_sig2 = f"probe_tcp::{p}"
 
-            if sig in executed_signatures or legacy_sig1 in executed_signatures or legacy_sig2 in executed_signatures:
+            if (
+                sig in executed_signatures
+                or legacy_sig1 in executed_signatures
+                or legacy_sig2 in executed_signatures
+            ):
                 if audit:
                     self._record_event(
                         audit,
                         InvestigationEventType.DUPLICATE_TEST_SKIPPED,
                         audit.current_state,
-                        {"tool": "probe_tcp", "target": str(p), "reason": "Duplicate test already executed in current investigation"},
+                        {
+                            "tool": "probe_tcp",
+                            "target": str(p),
+                            "reason": "Duplicate test already executed in current investigation",
+                        },
                     )
             else:
                 tool = self.tools.get_tool("probe_tcp")
@@ -1175,14 +1384,16 @@ class DiagnosticEngine:
                     test_id = f"test-probe-{len(executed_tests) + 1}"
                     rationale = f"Verify whether application is actively listening on internal port {p}"
 
-                    eig, utility, record = DiagnosticTestSelector.compute_eig_and_utility(
-                        tool=tool,
-                        target=str(p),
-                        parameters={"port": p},
-                        hypotheses=hypotheses,
-                        rationale=rationale,
-                        p_success_given_hyp=p_success_given_hyp,
-                        base_test_id=test_id,
+                    _eig, utility, record = (
+                        DiagnosticTestSelector.compute_eig_and_utility(
+                            tool=tool,
+                            target=str(p),
+                            parameters={"port": p},
+                            hypotheses=hypotheses,
+                            rationale=rationale,
+                            p_success_given_hyp=p_success_given_hyp,
+                            base_test_id=test_id,
+                        )
                     )
                     candidates.append((utility, record))
 
@@ -1193,13 +1404,21 @@ class DiagnosticEngine:
             legacy_sig1 = f"check_env_key::{var_name.strip().lower()}::{{}}"
             legacy_sig2 = f"check_env_key::{var_name}"
 
-            if sig in executed_signatures or legacy_sig1 in executed_signatures or legacy_sig2 in executed_signatures:
+            if (
+                sig in executed_signatures
+                or legacy_sig1 in executed_signatures
+                or legacy_sig2 in executed_signatures
+            ):
                 if audit:
                     self._record_event(
                         audit,
                         InvestigationEventType.DUPLICATE_TEST_SKIPPED,
                         audit.current_state,
-                        {"tool": "check_env_key", "target": var_name, "reason": "Duplicate test already executed in current investigation"},
+                        {
+                            "tool": "check_env_key",
+                            "target": var_name,
+                            "reason": "Duplicate test already executed in current investigation",
+                        },
                     )
             else:
                 tool = self.tools.get_tool("check_env_key")
@@ -1208,14 +1427,16 @@ class DiagnosticEngine:
                     test_id = f"test-probe-{len(executed_tests) + 1}"
                     rationale = f"Confirm whether environment variable '{var_name}' is missing in container environment"
 
-                    eig, utility, record = DiagnosticTestSelector.compute_eig_and_utility(
-                        tool=tool,
-                        target=var_name,
-                        parameters={"key": var_name},
-                        hypotheses=hypotheses,
-                        rationale=rationale,
-                        p_success_given_hyp=p_success_given_hyp,
-                        base_test_id=test_id,
+                    _eig, utility, record = (
+                        DiagnosticTestSelector.compute_eig_and_utility(
+                            tool=tool,
+                            target=var_name,
+                            parameters={"key": var_name},
+                            hypotheses=hypotheses,
+                            rationale=rationale,
+                            p_success_given_hyp=p_success_given_hyp,
+                            base_test_id=test_id,
+                        )
                     )
                     candidates.append((utility, record))
 
@@ -1229,10 +1450,10 @@ class DiagnosticEngine:
     async def run_investigation(
         self,
         project_root: Path,
-        budget: Optional[DiagnosticBudget] = None,
-        logs_override: Optional[str] = None,
-        inspect_override: Optional[Dict[str, Any]] = None,
-        cancellation_token: Optional[asyncio.Event] = None,
+        budget: DiagnosticBudget | None = None,
+        logs_override: str | None = None,
+        inspect_override: dict[str, Any] | None = None,
+        cancellation_token: asyncio.Event | None = None,
     ) -> DiagnosticEngineResult:
         """Executes the full diagnostic workflow for a given project with explicit state transitions,
         bounded budgets, per-tool timeouts, cancellation support, and a complete event history.
@@ -1243,30 +1464,41 @@ class DiagnosticEngine:
         audit = AuditLog()
         audit.current_state = InvestigationState.PENDING
         stop_reason = ""
-        evidence: List[EvidenceItem] = []
-        facts: Dict[str, Any] = {}
-        contradictions: List[ContradictionReport] = []
-        executed_tests: List[DiagnosticToolResult] = []
-        hypotheses: List[DiagnoseHypothesis] = []
-        missing_info: List[str] = []
+        evidence: list[EvidenceItem] = []
+        facts: dict[str, Any] = {}
+        contradictions: list[ContradictionReport] = []
+        executed_tests: list[DiagnosticToolResult] = []
+        hypotheses: list[DiagnoseHypothesis] = []
+        missing_info: list[str] = []
         uncertainty: float = 1.0
 
         try:
-            self._transition_state(audit, InvestigationState.INITIALIZING, "Initializing autonomous diagnostic investigation")
+            self._transition_state(
+                audit,
+                InvestigationState.INITIALIZING,
+                "Initializing autonomous diagnostic investigation",
+            )
 
             # Check cancellation early
             if self.is_cancellation_requested(cancellation_token):
                 stop_reason = "Investigation cancelled before execution began."
                 audit.stop_reason = stop_reason
                 self._transition_state(audit, InvestigationState.CANCELLED, stop_reason)
-                self._record_event(audit, InvestigationEventType.CANCELLATION_REQUESTED, InvestigationState.CANCELLED, {"reason": stop_reason})
+                self._record_event(
+                    audit,
+                    InvestigationEventType.CANCELLATION_REQUESTED,
+                    InvestigationState.CANCELLED,
+                    {"reason": stop_reason},
+                )
                 return self._build_result(
                     status=DiagnosisStatus.INSUFFICIENT_EVIDENCE,
                     summary=stop_reason,
                     hypotheses=[],
                     evidence=[],
                     recommended_tests=[],
-                    missing_info=["Investigation was cancelled before evidence collection."],
+                    missing_info=[
+                        "Investigation was cancelled before evidence collection."
+                    ],
                     confidence=0.0,
                     next_action="Resume or restart the diagnostic investigation.",
                     budget=active_budget,
@@ -1276,22 +1508,33 @@ class DiagnosticEngine:
                 )
 
             # Step 1: Collect & normalize initial evidence with provenance
-            self._transition_state(audit, InvestigationState.COLLECTING_EVIDENCE, "Collecting initial repository and runtime metadata")
+            self._transition_state(
+                audit,
+                InvestigationState.COLLECTING_EVIDENCE,
+                "Collecting initial repository and runtime metadata",
+            )
             hub = EvidenceCollectorHub(project_root)
             evidence = hub.collect_all_initial(logs_override, inspect_override)
 
             for ev in evidence:
-                audit.observations.append({
-                    "id": ev.id,
-                    "type": ev.type.value,
-                    "source": ev.source,
-                    "snippet": ev.content[:150],
-                    "collector": ev.collector,
-                    "target": ev.target,
-                    "provenance_type": ev.provenance_type,
-                    "fingerprint": ev.fingerprint,
-                })
-            self._record_event(audit, InvestigationEventType.EVIDENCE_COLLECTED, audit.current_state, {"evidence_count": len(evidence)})
+                audit.observations.append(
+                    {
+                        "id": ev.id,
+                        "type": ev.type.value,
+                        "source": ev.source,
+                        "snippet": ev.content[:150],
+                        "collector": ev.collector,
+                        "target": ev.target,
+                        "provenance_type": ev.provenance_type,
+                        "fingerprint": ev.fingerprint,
+                    }
+                )
+            self._record_event(
+                audit,
+                InvestigationEventType.EVIDENCE_COLLECTED,
+                audit.current_state,
+                {"evidence_count": len(evidence)},
+            )
 
             if self.is_cancellation_requested(cancellation_token):
                 stop_reason = "Investigation cancelled after evidence collection."
@@ -1302,7 +1545,9 @@ class DiagnosticEngine:
                     hypotheses=[],
                     evidence=evidence,
                     recommended_tests=[],
-                    missing_info=["Investigation cancelled before hypothesis formulation."],
+                    missing_info=[
+                        "Investigation cancelled before hypothesis formulation."
+                    ],
                     confidence=0.0,
                     next_action="Restart investigation.",
                     budget=active_budget,
@@ -1312,17 +1557,42 @@ class DiagnosticEngine:
                 )
 
             # Step 2: Establish deterministic facts and detect contradictions
-            self._transition_state(audit, InvestigationState.ANALYZING_FACTS, "Establishing deterministic facts and checking contradictions")
+            self._transition_state(
+                audit,
+                InvestigationState.ANALYZING_FACTS,
+                "Establishing deterministic facts and checking contradictions",
+            )
             facts = DeterministicFactAnalyzer.analyze_facts(evidence)
-            contradictions = ContradictionDetector.detect_contradictions(evidence, facts)
+            contradictions = ContradictionDetector.detect_contradictions(
+                evidence, facts
+            )
             audit.contradictions.extend(contradictions)
-            self._record_event(audit, InvestigationEventType.FACTS_ANALYZED, audit.current_state, {"normal_startup": facts.get("normal_startup_logged", False)})
+            self._record_event(
+                audit,
+                InvestigationEventType.FACTS_ANALYZED,
+                audit.current_state,
+                {"normal_startup": facts.get("normal_startup_logged", False)},
+            )
             if contradictions:
-                self._record_event(audit, InvestigationEventType.CONTRADICTION_DETECTED, audit.current_state, {"count": len(contradictions), "ids": [c.id for c in contradictions]})
+                self._record_event(
+                    audit,
+                    InvestigationEventType.CONTRADICTION_DETECTED,
+                    audit.current_state,
+                    {
+                        "count": len(contradictions),
+                        "ids": [c.id for c in contradictions],
+                    },
+                )
 
             # Step 2b: Interpretation with NVIDIA model through NebiusLLMClient (with bounded context, token budget, and quota resilience)
-            self._transition_state(audit, InvestigationState.MODEL_INTERPRETATION, "Querying NVIDIA Nemotron model via Nebius for root-cause reasoning")
-            bounded_evidence_str = EvidenceTrimmer.trim_and_bound_evidence(evidence, max_total_chars=2200)
+            self._transition_state(
+                audit,
+                InvestigationState.MODEL_INTERPRETATION,
+                "Querying NVIDIA Nemotron model via Nebius for root-cause reasoning",
+            )
+            bounded_evidence_str = EvidenceTrimmer.trim_and_bound_evidence(
+                evidence, max_total_chars=2200
+            )
             estimated_tokens = max(100, (len(bounded_evidence_str) + 400) // 4)
 
             if not active_budget.can_afford_tokens(estimated_tokens):
@@ -1336,7 +1606,7 @@ class DiagnosticEngine:
                         "tokens_used": active_budget.tokens_used,
                         "max_tokens": active_budget.max_tokens,
                         "action": "falling_back_to_deterministic_analysis",
-                    }
+                    },
                 )
                 logger.warning(
                     "Per-investigation token budget exhausted (%d/%d tokens used). Falling back to deterministic fact analysis.",
@@ -1347,7 +1617,12 @@ class DiagnosticEngine:
                 max_model_retries = 2
                 for attempt in range(max_model_retries + 1):
                     try:
-                        self._record_event(audit, InvestigationEventType.MODEL_INVOKED, audit.current_state, {"attempt": attempt + 1})
+                        self._record_event(
+                            audit,
+                            InvestigationEventType.MODEL_INVOKED,
+                            audit.current_state,
+                            {"attempt": attempt + 1},
+                        )
                         llm_hyp_resp = await self.llm_client.generate_hypotheses(
                             scenario_name=project_root.name,
                             iteration=0,
@@ -1355,17 +1630,25 @@ class DiagnosticEngine:
                             evidence=evidence,
                             current_hypotheses=[],
                         )
-                        reasoning_len = len(llm_hyp_resp.reasoning) if (llm_hyp_resp and llm_hyp_resp.reasoning) else 0
-                        actual_tokens = max(50, (len(bounded_evidence_str) + reasoning_len) // 4)
+                        reasoning_len = (
+                            len(llm_hyp_resp.reasoning)
+                            if (llm_hyp_resp and llm_hyp_resp.reasoning)
+                            else 0
+                        )
+                        actual_tokens = max(
+                            50, (len(bounded_evidence_str) + reasoning_len) // 4
+                        )
                         active_budget.consume_tokens(actual_tokens)
 
                         if llm_hyp_resp and llm_hyp_resp.reasoning:
-                            audit.observations.append({
-                                "id": f"model-interpretation-{attempt}",
-                                "type": "MODEL_REASONING",
-                                "source": "nebius:nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
-                                "snippet": llm_hyp_resp.reasoning[:200],
-                            })
+                            audit.observations.append(
+                                {
+                                    "id": f"model-interpretation-{attempt}",
+                                    "type": "MODEL_REASONING",
+                                    "source": "nebius:nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+                                    "snippet": llm_hyp_resp.reasoning[:200],
+                                }
+                            )
                             self._record_event(
                                 audit,
                                 InvestigationEventType.MODEL_SUCCESS,
@@ -1374,12 +1657,15 @@ class DiagnosticEngine:
                                     "snippet": llm_hyp_resp.reasoning[:120],
                                     "tokens_consumed": actual_tokens,
                                     "total_tokens_used": active_budget.tokens_used,
-                                }
+                                },
                             )
                         break
                     except (NebiusQuotaError, NebiusBillingError) as quota_exc:
                         # Graceful handling of quota/credit exhaustion: Do not crash or abort investigation
-                        logger.warning("Nebius quota or billing credit exhausted: %s. Gracefully falling back to deterministic facts.", quota_exc)
+                        logger.warning(
+                            "Nebius quota or billing credit exhausted: %s. Gracefully falling back to deterministic facts.",
+                            quota_exc,
+                        )
                         self._record_event(
                             audit,
                             InvestigationEventType.MODEL_ERROR,
@@ -1389,85 +1675,153 @@ class DiagnosticEngine:
                                 "error_type": "QUOTA_EXHAUSTED",
                                 "detail": str(quota_exc),
                                 "fallback": "deterministic_fact_analysis",
-                            }
+                            },
                         )
                         break
                     except Exception as exc:
-                        self._record_event(audit, InvestigationEventType.MODEL_ERROR, audit.current_state, {"attempt": attempt + 1, "error": str(exc)})
+                        self._record_event(
+                            audit,
+                            InvestigationEventType.MODEL_ERROR,
+                            audit.current_state,
+                            {"attempt": attempt + 1, "error": str(exc)},
+                        )
                         if attempt < max_model_retries:
-                            await asyncio.sleep(0.02 * (2 ** attempt))
+                            await asyncio.sleep(0.02 * (2**attempt))
                         else:
-                            logger.warning("Nebius model reasoning unavailable after %d attempts; falling back to deterministic facts: %s", max_model_retries + 1, exc)
+                            logger.warning(
+                                "Nebius model reasoning unavailable after %d attempts; falling back to deterministic facts: %s",
+                                max_model_retries + 1,
+                                exc,
+                            )
 
             # Step 3: Formulate initial competing hypotheses
-            self._transition_state(audit, InvestigationState.HYPOTHESIS_FORMULATION, "Formulating calibrated competing hypotheses")
-            hypotheses, missing_info, uncertainty = self.generate_hypotheses_from_evidence(evidence, facts, executed_tests)
+            self._transition_state(
+                audit,
+                InvestigationState.HYPOTHESIS_FORMULATION,
+                "Formulating calibrated competing hypotheses",
+            )
+            hypotheses, missing_info, uncertainty = (
+                self.generate_hypotheses_from_evidence(evidence, facts, executed_tests)
+            )
             audit.hypotheses_history.append([h.model_dump() for h in hypotheses])
             audit.current_uncertainty = uncertainty
-            audit.entropy_history.append(UncertaintyEstimator.calculate_entropy([h.confidence for h in hypotheses]))
-            self._record_event(audit, InvestigationEventType.HYPOTHESES_UPDATED, audit.current_state, {"hypotheses_count": len(hypotheses), "uncertainty": uncertainty})
+            audit.entropy_history.append(
+                UncertaintyEstimator.calculate_entropy(
+                    [h.confidence for h in hypotheses]
+                )
+            )
+            self._record_event(
+                audit,
+                InvestigationEventType.HYPOTHESES_UPDATED,
+                audit.current_state,
+                {"hypotheses_count": len(hypotheses), "uncertainty": uncertainty},
+            )
 
             # Step 4: Diagnostic investigation loop
             while True:
                 if self.is_cancellation_requested(cancellation_token):
                     stop_reason = "Investigation cancelled by caller."
                     audit.stop_reason = stop_reason
-                    self._transition_state(audit, InvestigationState.CANCELLED, stop_reason)
-                    self._record_event(audit, InvestigationEventType.CANCELLATION_REQUESTED, InvestigationState.CANCELLED, {"reason": stop_reason})
+                    self._transition_state(
+                        audit, InvestigationState.CANCELLED, stop_reason
+                    )
+                    self._record_event(
+                        audit,
+                        InvestigationEventType.CANCELLATION_REQUESTED,
+                        InvestigationState.CANCELLED,
+                        {"reason": stop_reason},
+                    )
                     break
 
                 if active_budget.is_expired():
                     stop_reason = f"Investigation timeout expired ({active_budget.timeout_seconds:.1f}s budget limit)."
-                    self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CONCLUDED, stop_reason
+                    )
                     break
 
-                if active_budget.consecutive_failures >= active_budget.max_consecutive_failures:
+                if (
+                    active_budget.consecutive_failures
+                    >= active_budget.max_consecutive_failures
+                ):
                     stop_reason = f"Investigation halted: reached max consecutive test failures ({active_budget.consecutive_failures})."
-                    self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CONCLUDED, stop_reason
+                    )
                     break
 
                 top_confidence = hypotheses[0].confidence if hypotheses else 0.0
 
                 if top_confidence >= 0.90:
                     stop_reason = f"Conclusive root cause identified with {top_confidence*100:.0f}% confidence."
-                    self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CONCLUDED, stop_reason
+                    )
                     break
 
                 if facts.get("external_outage_detected"):
                     stop_reason = "Failure caused by an external upstream dependency; local code modification cannot resolve third-party outage."
-                    self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CONCLUDED, stop_reason
+                    )
                     break
 
                 if not active_budget.can_afford(1):
                     stop_reason = f"Diagnostic budget exhausted (steps: {active_budget.steps_taken}/{active_budget.max_steps}, cost: {active_budget.used_cost}/{active_budget.max_cost})."
-                    self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CONCLUDED, stop_reason
+                    )
                     break
 
                 # Select next discriminating test
-                self._transition_state(audit, InvestigationState.SELECTING_TEST, "Selecting discriminating diagnostic probe")
-                next_test = self.select_next_test(hypotheses, facts, executed_tests, active_budget, audit=audit)
+                self._transition_state(
+                    audit,
+                    InvestigationState.SELECTING_TEST,
+                    "Selecting discriminating diagnostic probe",
+                )
+                next_test = self.select_next_test(
+                    hypotheses, facts, executed_tests, active_budget, audit=audit
+                )
                 if not next_test:
                     stop_reason = "No further discriminating tests available within registered toolset."
-                    self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CONCLUDED, stop_reason
+                    )
                     break
 
                 if not active_budget.can_afford(next_test.cost):
                     stop_reason = f"Diagnostic budget cannot afford chosen test cost ({next_test.cost})."
-                    self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CONCLUDED, stop_reason
+                    )
                     break
 
                 self._record_event(
                     audit,
                     InvestigationEventType.TEST_SELECTED,
                     audit.current_state,
-                    {"tool": next_test.tool_name, "target": next_test.target, "eig": next_test.expected_information_gain, "cost": next_test.cost},
+                    {
+                        "tool": next_test.tool_name,
+                        "target": next_test.target,
+                        "eig": next_test.expected_information_gain,
+                        "cost": next_test.cost,
+                    },
                 )
 
                 # Execute the selected tool
-                self._transition_state(audit, InvestigationState.EXECUTING_TEST, f"Executing tool '{next_test.tool_name}' on '{next_test.target}'")
+                self._transition_state(
+                    audit,
+                    InvestigationState.EXECUTING_TEST,
+                    f"Executing tool '{next_test.tool_name}' on '{next_test.target}'",
+                )
                 audit.selected_tests.append(next_test)
                 active_budget.consume(next_test.cost)
-                self._record_event(audit, InvestigationEventType.BUDGET_CONSUMED, audit.current_state, {"cost": next_test.cost, "total_cost": active_budget.used_cost})
+                self._record_event(
+                    audit,
+                    InvestigationEventType.BUDGET_CONSUMED,
+                    audit.current_state,
+                    {"cost": next_test.cost, "total_cost": active_budget.used_cost},
+                )
 
                 # Build simulated context for offline fixture runs
                 sim_context = {}
@@ -1479,9 +1833,14 @@ class DiagnosticEngine:
                     if facts.get("configured_healthcheck"):
                         bad_ep = facts["configured_healthcheck"]["endpoint"]
                         if bad_ep not in sim_context["endpoints"]:
-                            sim_context["endpoints"][bad_ep] = {"status_code": 404, "body": "Not Found"}
+                            sim_context["endpoints"][bad_ep] = {
+                                "status_code": 404,
+                                "body": "Not Found",
+                            }
 
-                tool_timeout = getattr(self.tools.get_tool(next_test.tool_name), "timeout_seconds", 5.0)
+                tool_timeout = getattr(
+                    self.tools.get_tool(next_test.tool_name), "timeout_seconds", 5.0
+                )
                 result = await self.tools.execute_tool(
                     tool_name=next_test.tool_name,
                     target=next_test.target,
@@ -1499,7 +1858,11 @@ class DiagnosticEngine:
                         audit,
                         InvestigationEventType.TEST_TIMEOUT,
                         audit.current_state,
-                        {"tool": next_test.tool_name, "target": next_test.target, "duration_ms": result.duration_ms},
+                        {
+                            "tool": next_test.tool_name,
+                            "target": next_test.target,
+                            "duration_ms": result.duration_ms,
+                        },
                     )
                 elif not result.success:
                     active_budget.record_failure()
@@ -1507,7 +1870,11 @@ class DiagnosticEngine:
                         audit,
                         InvestigationEventType.TEST_FAILED,
                         audit.current_state,
-                        {"tool": next_test.tool_name, "target": next_test.target, "output": result.output[:150]},
+                        {
+                            "tool": next_test.tool_name,
+                            "target": next_test.target,
+                            "output": result.output[:150],
+                        },
                     )
                 else:
                     active_budget.record_success()
@@ -1515,12 +1882,23 @@ class DiagnosticEngine:
                         audit,
                         InvestigationEventType.TEST_EXECUTED,
                         audit.current_state,
-                        {"tool": next_test.tool_name, "target": next_test.target, "success": True, "duration_ms": result.duration_ms},
+                        {
+                            "tool": next_test.tool_name,
+                            "target": next_test.target,
+                            "success": True,
+                            "duration_ms": result.duration_ms,
+                        },
                     )
 
                 # Integrate probe evidence
-                self._transition_state(audit, InvestigationState.EVALUATING_RESULTS, "Integrating probe results into evidence store")
-                output_fingerprint = hashlib.sha256(result.output.encode("utf-8")).hexdigest()[:16]
+                self._transition_state(
+                    audit,
+                    InvestigationState.EVALUATING_RESULTS,
+                    "Integrating probe results into evidence store",
+                )
+                output_fingerprint = hashlib.sha256(
+                    result.output.encode("utf-8")
+                ).hexdigest()[:16]
                 evidence.append(
                     EvidenceItem(
                         id=f"ev-probe-{len(executed_tests)}",
@@ -1537,38 +1915,80 @@ class DiagnosticEngine:
                 )
 
                 # Re-evaluate hypotheses with new empirical evidence
-                self._transition_state(audit, InvestigationState.HYPOTHESIS_FORMULATION, "Re-calibrating hypotheses with empirical probe results")
-                hypotheses, missing_info, uncertainty = self.generate_hypotheses_from_evidence(evidence, facts, executed_tests)
+                self._transition_state(
+                    audit,
+                    InvestigationState.HYPOTHESIS_FORMULATION,
+                    "Re-calibrating hypotheses with empirical probe results",
+                )
+                hypotheses, missing_info, uncertainty = (
+                    self.generate_hypotheses_from_evidence(
+                        evidence, facts, executed_tests
+                    )
+                )
                 audit.hypotheses_history.append([h.model_dump() for h in hypotheses])
                 audit.current_uncertainty = uncertainty
-                audit.entropy_history.append(UncertaintyEstimator.calculate_entropy([h.confidence for h in hypotheses]))
-                self._record_event(audit, InvestigationEventType.HYPOTHESES_UPDATED, audit.current_state, {"count": len(hypotheses), "uncertainty": uncertainty})
+                audit.entropy_history.append(
+                    UncertaintyEstimator.calculate_entropy(
+                        [h.confidence for h in hypotheses]
+                    )
+                )
+                self._record_event(
+                    audit,
+                    InvestigationEventType.HYPOTHESES_UPDATED,
+                    audit.current_state,
+                    {"count": len(hypotheses), "uncertainty": uncertainty},
+                )
 
         except asyncio.CancelledError:
             stop_reason = "Investigation cancelled by asyncio cancellation."
             if audit.current_state != InvestigationState.CANCELLED:
                 try:
-                    self._transition_state(audit, InvestigationState.CANCELLED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CANCELLED, stop_reason
+                    )
                 except Exception:
                     audit.current_state = InvestigationState.CANCELLED
-            self._record_event(audit, InvestigationEventType.CANCELLATION_REQUESTED, InvestigationState.CANCELLED, {"reason": stop_reason})
+            self._record_event(
+                audit,
+                InvestigationEventType.CANCELLATION_REQUESTED,
+                InvestigationState.CANCELLED,
+                {"reason": stop_reason},
+            )
 
         except Exception as exc:
             stop_reason = f"Fatal investigation error: {exc}"
-            logger.exception("Diagnostic engine fatal error: %s", exc)
+            logger.exception("Diagnostic engine fatal error")
             if audit.current_state != InvestigationState.FAILED:
                 try:
-                    self._transition_state(audit, InvestigationState.FAILED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.FAILED, stop_reason
+                    )
                 except Exception:
                     audit.current_state = InvestigationState.FAILED
-            self._record_event(audit, InvestigationEventType.ERROR, InvestigationState.FAILED, {"error": str(exc)})
+            self._record_event(
+                audit,
+                InvestigationEventType.ERROR,
+                InvestigationState.FAILED,
+                {"error": str(exc)},
+            )
 
         # Ensure terminal state is reached cleanly
-        if audit.current_state not in {InvestigationState.CONCLUDED, InvestigationState.CANCELLED, InvestigationState.FAILED}:
-            self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason or "Finished")
+        if audit.current_state not in {
+            InvestigationState.CONCLUDED,
+            InvestigationState.CANCELLED,
+            InvestigationState.FAILED,
+        }:
+            self._transition_state(
+                audit, InvestigationState.CONCLUDED, stop_reason or "Finished"
+            )
 
         audit.stop_reason = stop_reason or audit.stop_reason
-        self._record_event(audit, InvestigationEventType.INVESTIGATION_CONCLUDED, audit.current_state, {"stop_reason": audit.stop_reason})
+        self._record_event(
+            audit,
+            InvestigationEventType.INVESTIGATION_CONCLUDED,
+            audit.current_state,
+            {"stop_reason": audit.stop_reason},
+        )
 
         top_confidence = hypotheses[0].confidence if hypotheses else 0.0
 
@@ -1578,12 +1998,16 @@ class DiagnosticEngine:
             next_action = "Restart the investigation."
         elif audit.current_state == InvestigationState.FAILED:
             status = DiagnosisStatus.INSUFFICIENT_EVIDENCE
-            summary = f"Investigation encountered an internal error ({audit.stop_reason})."
+            summary = (
+                f"Investigation encountered an internal error ({audit.stop_reason})."
+            )
             next_action = "Review system logs and report diagnostic error."
         elif top_confidence >= 0.90:
             status = DiagnosisStatus.DIAGNOSIS_AVAILABLE
             summary = hypotheses[0].description
-            next_action = "Apply minimal configuration or code patch to resolve root cause."
+            next_action = (
+                "Apply minimal configuration or code patch to resolve root cause."
+            )
         elif facts.get("external_outage_detected"):
             status = DiagnosisStatus.INSUFFICIENT_EVIDENCE
             summary = "Service failure is caused by an unreachable external gateway. Local repository configuration is valid."
@@ -1591,7 +2015,9 @@ class DiagnosticEngine:
         else:
             status = DiagnosisStatus.INSUFFICIENT_EVIDENCE
             summary = f"Evidence is insufficient to isolate a definitive root cause ({audit.stop_reason})."
-            next_action = "Request human intervention or provide additional runtime logs."
+            next_action = (
+                "Request human intervention or provide additional runtime logs."
+            )
 
         return self._build_result(
             status=status,
@@ -1610,10 +2036,10 @@ class DiagnosticEngine:
 
     async def run_investigation_on_evidence(
         self,
-        evidence: List[EvidenceItem],
-        budget: Optional[DiagnosticBudget] = None,
-        project_root: Optional[Path] = None,
-        cancellation_token: Optional[asyncio.Event] = None,
+        evidence: list[EvidenceItem],
+        budget: DiagnosticBudget | None = None,
+        project_root: Path | None = None,
+        cancellation_token: asyncio.Event | None = None,
     ) -> DiagnosticEngineResult:
         """Runs the diagnostic planner on an in-memory list of evidence items."""
         active_budget = budget or DiagnosticBudget()
@@ -1622,21 +2048,30 @@ class DiagnosticEngine:
         audit = AuditLog()
         audit.current_state = InvestigationState.PENDING
         stop_reason = ""
-        facts: Dict[str, Any] = {}
-        contradictions: List[ContradictionReport] = []
-        executed_tests: List[DiagnosticToolResult] = []
-        hypotheses: List[DiagnoseHypothesis] = []
-        missing_info: List[str] = []
+        facts: dict[str, Any] = {}
+        contradictions: list[ContradictionReport] = []
+        executed_tests: list[DiagnosticToolResult] = []
+        hypotheses: list[DiagnoseHypothesis] = []
+        missing_info: list[str] = []
         uncertainty: float = 1.0
 
         try:
-            self._transition_state(audit, InvestigationState.INITIALIZING, "Initializing autonomous diagnostic investigation")
+            self._transition_state(
+                audit,
+                InvestigationState.INITIALIZING,
+                "Initializing autonomous diagnostic investigation",
+            )
 
             if self.is_cancellation_requested(cancellation_token):
                 stop_reason = "Investigation cancelled before execution began."
                 audit.stop_reason = stop_reason
                 self._transition_state(audit, InvestigationState.CANCELLED, stop_reason)
-                self._record_event(audit, InvestigationEventType.CANCELLATION_REQUESTED, InvestigationState.CANCELLED, {"reason": stop_reason})
+                self._record_event(
+                    audit,
+                    InvestigationEventType.CANCELLATION_REQUESTED,
+                    InvestigationState.CANCELLED,
+                    {"reason": stop_reason},
+                )
                 return self._build_result(
                     status=DiagnosisStatus.INSUFFICIENT_EVIDENCE,
                     summary=stop_reason,
@@ -1652,93 +2087,182 @@ class DiagnosticEngine:
                     contradictions=[],
                 )
 
-            self._transition_state(audit, InvestigationState.COLLECTING_EVIDENCE, "Processing in-memory evidence store")
+            self._transition_state(
+                audit,
+                InvestigationState.COLLECTING_EVIDENCE,
+                "Processing in-memory evidence store",
+            )
             for ev in evidence:
-                audit.observations.append({
-                    "id": ev.id,
-                    "type": ev.type.value,
-                    "source": ev.source,
-                    "snippet": ev.content[:150],
-                    "collector": ev.collector,
-                    "target": ev.target,
-                    "provenance_type": ev.provenance_type,
-                    "fingerprint": ev.fingerprint,
-                })
-            self._record_event(audit, InvestigationEventType.EVIDENCE_COLLECTED, audit.current_state, {"evidence_count": len(evidence)})
+                audit.observations.append(
+                    {
+                        "id": ev.id,
+                        "type": ev.type.value,
+                        "source": ev.source,
+                        "snippet": ev.content[:150],
+                        "collector": ev.collector,
+                        "target": ev.target,
+                        "provenance_type": ev.provenance_type,
+                        "fingerprint": ev.fingerprint,
+                    }
+                )
+            self._record_event(
+                audit,
+                InvestigationEventType.EVIDENCE_COLLECTED,
+                audit.current_state,
+                {"evidence_count": len(evidence)},
+            )
 
-            self._transition_state(audit, InvestigationState.ANALYZING_FACTS, "Analyzing facts and detecting contradictions")
+            self._transition_state(
+                audit,
+                InvestigationState.ANALYZING_FACTS,
+                "Analyzing facts and detecting contradictions",
+            )
             facts = DeterministicFactAnalyzer.analyze_facts(evidence)
-            contradictions = ContradictionDetector.detect_contradictions(evidence, facts)
+            contradictions = ContradictionDetector.detect_contradictions(
+                evidence, facts
+            )
             audit.contradictions.extend(contradictions)
-            self._record_event(audit, InvestigationEventType.FACTS_ANALYZED, audit.current_state, {"normal_startup": facts.get("normal_startup_logged", False)})
+            self._record_event(
+                audit,
+                InvestigationEventType.FACTS_ANALYZED,
+                audit.current_state,
+                {"normal_startup": facts.get("normal_startup_logged", False)},
+            )
             if contradictions:
-                self._record_event(audit, InvestigationEventType.CONTRADICTION_DETECTED, audit.current_state, {"count": len(contradictions), "ids": [c.id for c in contradictions]})
+                self._record_event(
+                    audit,
+                    InvestigationEventType.CONTRADICTION_DETECTED,
+                    audit.current_state,
+                    {
+                        "count": len(contradictions),
+                        "ids": [c.id for c in contradictions],
+                    },
+                )
 
-            self._transition_state(audit, InvestigationState.HYPOTHESIS_FORMULATION, "Formulating initial competing hypotheses")
-            hypotheses, missing_info, uncertainty = self.generate_hypotheses_from_evidence(evidence, facts, executed_tests)
+            self._transition_state(
+                audit,
+                InvestigationState.HYPOTHESIS_FORMULATION,
+                "Formulating initial competing hypotheses",
+            )
+            hypotheses, missing_info, uncertainty = (
+                self.generate_hypotheses_from_evidence(evidence, facts, executed_tests)
+            )
             audit.hypotheses_history.append([h.model_dump() for h in hypotheses])
             audit.current_uncertainty = uncertainty
-            audit.entropy_history.append(UncertaintyEstimator.calculate_entropy([h.confidence for h in hypotheses]))
-            self._record_event(audit, InvestigationEventType.HYPOTHESES_UPDATED, audit.current_state, {"hypotheses_count": len(hypotheses), "uncertainty": uncertainty})
+            audit.entropy_history.append(
+                UncertaintyEstimator.calculate_entropy(
+                    [h.confidence for h in hypotheses]
+                )
+            )
+            self._record_event(
+                audit,
+                InvestigationEventType.HYPOTHESES_UPDATED,
+                audit.current_state,
+                {"hypotheses_count": len(hypotheses), "uncertainty": uncertainty},
+            )
 
             while True:
                 if self.is_cancellation_requested(cancellation_token):
                     stop_reason = "Investigation cancelled by caller."
                     audit.stop_reason = stop_reason
-                    self._transition_state(audit, InvestigationState.CANCELLED, stop_reason)
-                    self._record_event(audit, InvestigationEventType.CANCELLATION_REQUESTED, InvestigationState.CANCELLED, {"reason": stop_reason})
+                    self._transition_state(
+                        audit, InvestigationState.CANCELLED, stop_reason
+                    )
+                    self._record_event(
+                        audit,
+                        InvestigationEventType.CANCELLATION_REQUESTED,
+                        InvestigationState.CANCELLED,
+                        {"reason": stop_reason},
+                    )
                     break
 
                 if active_budget.is_expired():
                     stop_reason = f"Investigation timeout expired ({active_budget.timeout_seconds:.1f}s budget limit)."
-                    self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CONCLUDED, stop_reason
+                    )
                     break
 
-                if active_budget.consecutive_failures >= active_budget.max_consecutive_failures:
+                if (
+                    active_budget.consecutive_failures
+                    >= active_budget.max_consecutive_failures
+                ):
                     stop_reason = f"Investigation halted: reached max consecutive test failures ({active_budget.consecutive_failures})."
-                    self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CONCLUDED, stop_reason
+                    )
                     break
 
                 top_confidence = hypotheses[0].confidence if hypotheses else 0.0
 
                 if top_confidence >= 0.90:
                     stop_reason = f"Conclusive root cause identified with {top_confidence*100:.0f}% confidence."
-                    self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CONCLUDED, stop_reason
+                    )
                     break
 
                 if facts.get("external_outage_detected"):
                     stop_reason = "Failure caused by an external upstream dependency; local code modification cannot resolve third-party outage."
-                    self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CONCLUDED, stop_reason
+                    )
                     break
 
                 if not active_budget.can_afford(1):
                     stop_reason = f"Diagnostic budget exhausted (steps: {active_budget.steps_taken}/{active_budget.max_steps}, cost: {active_budget.used_cost}/{active_budget.max_cost})."
-                    self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CONCLUDED, stop_reason
+                    )
                     break
 
-                self._transition_state(audit, InvestigationState.SELECTING_TEST, "Selecting discriminating diagnostic probe")
-                next_test = self.select_next_test(hypotheses, facts, executed_tests, active_budget, audit=audit)
+                self._transition_state(
+                    audit,
+                    InvestigationState.SELECTING_TEST,
+                    "Selecting discriminating diagnostic probe",
+                )
+                next_test = self.select_next_test(
+                    hypotheses, facts, executed_tests, active_budget, audit=audit
+                )
                 if not next_test:
                     stop_reason = "No further discriminating tests available within registered toolset."
-                    self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CONCLUDED, stop_reason
+                    )
                     break
 
                 if not active_budget.can_afford(next_test.cost):
                     stop_reason = f"Diagnostic budget cannot afford chosen test cost ({next_test.cost})."
-                    self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CONCLUDED, stop_reason
+                    )
                     break
 
                 self._record_event(
                     audit,
                     InvestigationEventType.TEST_SELECTED,
                     audit.current_state,
-                    {"tool": next_test.tool_name, "target": next_test.target, "eig": next_test.expected_information_gain, "cost": next_test.cost},
+                    {
+                        "tool": next_test.tool_name,
+                        "target": next_test.target,
+                        "eig": next_test.expected_information_gain,
+                        "cost": next_test.cost,
+                    },
                 )
 
-                self._transition_state(audit, InvestigationState.EXECUTING_TEST, f"Executing tool '{next_test.tool_name}' on '{next_test.target}'")
+                self._transition_state(
+                    audit,
+                    InvestigationState.EXECUTING_TEST,
+                    f"Executing tool '{next_test.tool_name}' on '{next_test.target}'",
+                )
                 audit.selected_tests.append(next_test)
                 active_budget.consume(next_test.cost)
-                self._record_event(audit, InvestigationEventType.BUDGET_CONSUMED, audit.current_state, {"cost": next_test.cost, "total_cost": active_budget.used_cost})
+                self._record_event(
+                    audit,
+                    InvestigationEventType.BUDGET_CONSUMED,
+                    audit.current_state,
+                    {"cost": next_test.cost, "total_cost": active_budget.used_cost},
+                )
 
                 sim_context = {}
                 if facts.get("actual_source_routes"):
@@ -1749,10 +2273,15 @@ class DiagnosticEngine:
                     if facts.get("configured_healthcheck"):
                         bad_ep = facts["configured_healthcheck"]["endpoint"]
                         if bad_ep not in sim_context["endpoints"]:
-                            sim_context["endpoints"][bad_ep] = {"status_code": 404, "body": "Not Found"}
+                            sim_context["endpoints"][bad_ep] = {
+                                "status_code": 404,
+                                "body": "Not Found",
+                            }
 
                 target_root = project_root or Path(".")
-                tool_timeout = getattr(self.tools.get_tool(next_test.tool_name), "timeout_seconds", 5.0)
+                tool_timeout = getattr(
+                    self.tools.get_tool(next_test.tool_name), "timeout_seconds", 5.0
+                )
                 result = await self.tools.execute_tool(
                     tool_name=next_test.tool_name,
                     target=next_test.target,
@@ -1770,7 +2299,11 @@ class DiagnosticEngine:
                         audit,
                         InvestigationEventType.TEST_TIMEOUT,
                         audit.current_state,
-                        {"tool": next_test.tool_name, "target": next_test.target, "duration_ms": result.duration_ms},
+                        {
+                            "tool": next_test.tool_name,
+                            "target": next_test.target,
+                            "duration_ms": result.duration_ms,
+                        },
                     )
                 elif not result.success:
                     active_budget.record_failure()
@@ -1778,7 +2311,11 @@ class DiagnosticEngine:
                         audit,
                         InvestigationEventType.TEST_FAILED,
                         audit.current_state,
-                        {"tool": next_test.tool_name, "target": next_test.target, "output": result.output[:150]},
+                        {
+                            "tool": next_test.tool_name,
+                            "target": next_test.target,
+                            "output": result.output[:150],
+                        },
                     )
                 else:
                     active_budget.record_success()
@@ -1786,11 +2323,22 @@ class DiagnosticEngine:
                         audit,
                         InvestigationEventType.TEST_EXECUTED,
                         audit.current_state,
-                        {"tool": next_test.tool_name, "target": next_test.target, "success": True, "duration_ms": result.duration_ms},
+                        {
+                            "tool": next_test.tool_name,
+                            "target": next_test.target,
+                            "success": True,
+                            "duration_ms": result.duration_ms,
+                        },
                     )
 
-                self._transition_state(audit, InvestigationState.EVALUATING_RESULTS, "Integrating probe results into evidence store")
-                output_fingerprint = hashlib.sha256(result.output.encode("utf-8")).hexdigest()[:16]
+                self._transition_state(
+                    audit,
+                    InvestigationState.EVALUATING_RESULTS,
+                    "Integrating probe results into evidence store",
+                )
+                output_fingerprint = hashlib.sha256(
+                    result.output.encode("utf-8")
+                ).hexdigest()[:16]
                 evidence.append(
                     EvidenceItem(
                         id=f"ev-probe-{len(executed_tests)}",
@@ -1806,37 +2354,79 @@ class DiagnosticEngine:
                     )
                 )
 
-                self._transition_state(audit, InvestigationState.HYPOTHESIS_FORMULATION, "Re-calibrating hypotheses with empirical probe results")
-                hypotheses, missing_info, uncertainty = self.generate_hypotheses_from_evidence(evidence, facts, executed_tests)
+                self._transition_state(
+                    audit,
+                    InvestigationState.HYPOTHESIS_FORMULATION,
+                    "Re-calibrating hypotheses with empirical probe results",
+                )
+                hypotheses, missing_info, uncertainty = (
+                    self.generate_hypotheses_from_evidence(
+                        evidence, facts, executed_tests
+                    )
+                )
                 audit.hypotheses_history.append([h.model_dump() for h in hypotheses])
                 audit.current_uncertainty = uncertainty
-                audit.entropy_history.append(UncertaintyEstimator.calculate_entropy([h.confidence for h in hypotheses]))
-                self._record_event(audit, InvestigationEventType.HYPOTHESES_UPDATED, audit.current_state, {"count": len(hypotheses), "uncertainty": uncertainty})
+                audit.entropy_history.append(
+                    UncertaintyEstimator.calculate_entropy(
+                        [h.confidence for h in hypotheses]
+                    )
+                )
+                self._record_event(
+                    audit,
+                    InvestigationEventType.HYPOTHESES_UPDATED,
+                    audit.current_state,
+                    {"count": len(hypotheses), "uncertainty": uncertainty},
+                )
 
         except asyncio.CancelledError:
             stop_reason = "Investigation cancelled by asyncio cancellation."
             if audit.current_state != InvestigationState.CANCELLED:
                 try:
-                    self._transition_state(audit, InvestigationState.CANCELLED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.CANCELLED, stop_reason
+                    )
                 except Exception:
                     audit.current_state = InvestigationState.CANCELLED
-            self._record_event(audit, InvestigationEventType.CANCELLATION_REQUESTED, InvestigationState.CANCELLED, {"reason": stop_reason})
+            self._record_event(
+                audit,
+                InvestigationEventType.CANCELLATION_REQUESTED,
+                InvestigationState.CANCELLED,
+                {"reason": stop_reason},
+            )
 
         except Exception as exc:
             stop_reason = f"Fatal investigation error: {exc}"
-            logger.exception("Diagnostic engine fatal error: %s", exc)
+            logger.exception("Diagnostic engine fatal error")
             if audit.current_state != InvestigationState.FAILED:
                 try:
-                    self._transition_state(audit, InvestigationState.FAILED, stop_reason)
+                    self._transition_state(
+                        audit, InvestigationState.FAILED, stop_reason
+                    )
                 except Exception:
                     audit.current_state = InvestigationState.FAILED
-            self._record_event(audit, InvestigationEventType.ERROR, InvestigationState.FAILED, {"error": str(exc)})
+            self._record_event(
+                audit,
+                InvestigationEventType.ERROR,
+                InvestigationState.FAILED,
+                {"error": str(exc)},
+            )
 
-        if audit.current_state not in {InvestigationState.CONCLUDED, InvestigationState.CANCELLED, InvestigationState.FAILED}:
-            self._transition_state(audit, InvestigationState.CONCLUDED, stop_reason or "Finished")
+        if audit.current_state not in {
+            InvestigationState.CONCLUDED,
+            InvestigationState.CANCELLED,
+            InvestigationState.FAILED,
+        }:
+            self._transition_state(
+                audit, InvestigationState.CONCLUDED, stop_reason or "Finished"
+            )
 
         audit.stop_reason = stop_reason or audit.stop_reason
-        self._record_event(audit, InvestigationEventType.INVESTIGATION_CONCLUDED, audit.current_state, {"stop_reason": audit.stop_reason})
+        self._record_event(
+            audit,
+            InvestigationEventType.INVESTIGATION_CONCLUDED,
+            audit.current_state,
+            {"stop_reason": audit.stop_reason},
+        )
 
         top_confidence = hypotheses[0].confidence if hypotheses else 0.0
 
@@ -1846,12 +2436,16 @@ class DiagnosticEngine:
             next_action = "Restart the investigation."
         elif audit.current_state == InvestigationState.FAILED:
             status = DiagnosisStatus.INSUFFICIENT_EVIDENCE
-            summary = f"Investigation encountered an internal error ({audit.stop_reason})."
+            summary = (
+                f"Investigation encountered an internal error ({audit.stop_reason})."
+            )
             next_action = "Review system logs and report diagnostic error."
         elif top_confidence >= 0.90:
             status = DiagnosisStatus.DIAGNOSIS_AVAILABLE
             summary = hypotheses[0].description
-            next_action = "Apply minimal configuration or code patch to resolve root cause."
+            next_action = (
+                "Apply minimal configuration or code patch to resolve root cause."
+            )
         elif facts.get("external_outage_detected"):
             status = DiagnosisStatus.INSUFFICIENT_EVIDENCE
             summary = "Service failure is caused by an unreachable external gateway. Local repository configuration is valid."
@@ -1859,7 +2453,9 @@ class DiagnosticEngine:
         else:
             status = DiagnosisStatus.INSUFFICIENT_EVIDENCE
             summary = f"Evidence is insufficient to isolate a definitive root cause ({audit.stop_reason})."
-            next_action = "Request human intervention or provide additional runtime logs."
+            next_action = (
+                "Request human intervention or provide additional runtime logs."
+            )
 
         return self._build_result(
             status=status,
@@ -1880,16 +2476,16 @@ class DiagnosticEngine:
         self,
         status: DiagnosisStatus,
         summary: str,
-        hypotheses: List[DiagnoseHypothesis],
-        evidence: List[EvidenceItem],
-        recommended_tests: List[SelectedTestRecord],
-        missing_info: List[str],
+        hypotheses: list[DiagnoseHypothesis],
+        evidence: list[EvidenceItem],
+        recommended_tests: list[SelectedTestRecord],
+        missing_info: list[str],
         confidence: float,
         next_action: str,
         budget: DiagnosticBudget,
         audit: AuditLog,
         uncertainty: float,
-        contradictions: List[ContradictionReport],
+        contradictions: list[ContradictionReport],
     ) -> DiagnosticEngineResult:
         """Helper to construct DiagnosticEngineResult with complete event history and state."""
         evidence_records = [

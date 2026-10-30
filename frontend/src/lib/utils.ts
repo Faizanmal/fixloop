@@ -160,3 +160,50 @@ export function extractEnvVarInfo(text: string): { varName: string; defaultVal: 
   return { varName: vUpper, defaultVal };
 }
 
+/**
+ * Converts internal scenario identifiers (or custom service names) into clean human-readable titles.
+ * e.g. scenario_a_missing_env -> Scenario A
+ *      scenario_d_insufficient_evidence -> Scenario D
+ *      orders-api -> Custom: orders-api
+ */
+export function formatScenarioTargetName(scenarioName?: string | null): string {
+  if (!scenarioName) return "Custom Target";
+  const norm = scenarioName.trim().toLowerCase();
+
+  // Handle scenario_a, scenario_b, etc.
+  const letterMatch = norm.match(/^scenario_([a-g])(_.*)?$/);
+  if (letterMatch) {
+    return `Scenario ${letterMatch[1].toUpperCase()}`;
+  }
+
+  // Handle scenario_1, scenario_2, etc.
+  const numMatch = norm.match(/^scenario_(\d+)(_.*)?$/);
+  if (numMatch) {
+    return `Scenario ${numMatch[1]}`;
+  }
+
+  if (norm.startsWith("custom:")) {
+    return scenarioName;
+  }
+
+  return `Custom: ${scenarioName}`;
+}
+
+/**
+ * Formats ISO timestamp with both date and time (e.g. "Oct 30, 14:20:15").
+ */
+export function formatRecordedTimestamp(isoOrTimeString?: string | null): string {
+  if (!isoOrTimeString) return "—";
+  const date = new Date(isoOrTimeString);
+  if (isNaN(date.getTime())) return isoOrTimeString;
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+

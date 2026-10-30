@@ -15,43 +15,35 @@ Validates:
 import asyncio
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from backend.app.agent.engine import (
+    AuditLog,
+    DeterministicFactAnalyzer,
+    DiagnosticBudget,
+    DiagnosticEngine,
+    InvalidStateTransitionError,
+    InvestigationEventType,
+    InvestigationState,
+    SelectedTestRecord,
+    normalize_test_signature,
+)
 from backend.app.core.models import (
-    DiagnosisStatus,
     DiagnoseHypothesis,
+    DiagnosisStatus,
     HypothesisCategory,
-    EvidenceItem,
-    EvidenceType,
     VerificationStatus,
 )
-from backend.app.agent.engine import (
-    DiagnosticEngine,
-    DiagnosticBudget,
-    AuditLog,
-    InvestigationState,
-    InvestigationEventType,
-    InvestigationEvent,
-    InvalidStateTransitionError,
-    normalize_test_signature,
-    VALID_STATE_TRANSITIONS,
-    DeterministicFactAnalyzer,
-    SelectedTestRecord,
-)
 from backend.app.evidence.tools import (
-    DiagnosticToolRegistry,
     BaseDiagnosticTool,
+    DiagnosticToolRegistry,
     DiagnosticToolResult,
-    ToolProbeHTTP,
-    ToolProbeTCP,
     ToolCheckEnvKey,
+    ToolProbeTCP,
 )
 from backend.app.llm.exceptions import NebiusError
-from backend.app.sandbox.verifier import ControlledVerificationPipeline, VerificationReport
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCENARIOS_DIR = REPO_ROOT / "scenarios"
@@ -60,6 +52,7 @@ SCENARIOS_DIR = REPO_ROOT / "scenarios"
 # =========================================================================
 # 1. Explicit State Transitions & Validation
 # =========================================================================
+
 
 def test_valid_state_transitions():
     """Verify that valid state transitions succeed and append chronological events."""
@@ -71,13 +64,19 @@ def test_valid_state_transitions():
     engine._transition_state(audit, InvestigationState.INITIALIZING, "Starting")
     assert audit.current_state == InvestigationState.INITIALIZING
 
-    engine._transition_state(audit, InvestigationState.COLLECTING_EVIDENCE, "Gathering files")
+    engine._transition_state(
+        audit, InvestigationState.COLLECTING_EVIDENCE, "Gathering files"
+    )
     assert audit.current_state == InvestigationState.COLLECTING_EVIDENCE
 
-    engine._transition_state(audit, InvestigationState.ANALYZING_FACTS, "Checking rules")
+    engine._transition_state(
+        audit, InvestigationState.ANALYZING_FACTS, "Checking rules"
+    )
     assert audit.current_state == InvestigationState.ANALYZING_FACTS
 
-    engine._transition_state(audit, InvestigationState.HYPOTHESIS_FORMULATION, "Drafting hypotheses")
+    engine._transition_state(
+        audit, InvestigationState.HYPOTHESIS_FORMULATION, "Drafting hypotheses"
+    )
     assert audit.current_state == InvestigationState.HYPOTHESIS_FORMULATION
 
     engine._transition_state(audit, InvestigationState.SELECTING_TEST, "Picking test")
@@ -86,14 +85,20 @@ def test_valid_state_transitions():
     engine._transition_state(audit, InvestigationState.EXECUTING_TEST, "Running probe")
     assert audit.current_state == InvestigationState.EXECUTING_TEST
 
-    engine._transition_state(audit, InvestigationState.EVALUATING_RESULTS, "Checking probe output")
+    engine._transition_state(
+        audit, InvestigationState.EVALUATING_RESULTS, "Checking probe output"
+    )
     assert audit.current_state == InvestigationState.EVALUATING_RESULTS
 
     engine._transition_state(audit, InvestigationState.CONCLUDED, "Done")
     assert audit.current_state == InvestigationState.CONCLUDED
 
     # Verify event count and chronological order
-    transition_events = [e for e in audit.events if e.event_type == InvestigationEventType.STATE_TRANSITION]
+    transition_events = [
+        e
+        for e in audit.events
+        if e.event_type == InvestigationEventType.STATE_TRANSITION
+    ]
     assert len(transition_events) == 8
     for i in range(len(transition_events) - 1):
         assert transition_events[i].timestamp <= transition_events[i + 1].timestamp
@@ -107,21 +112,28 @@ def test_illegal_state_transition_rejection():
 
     # Direct jump from PENDING to CONCLUDED or EXECUTING_TEST is illegal
     with pytest.raises(InvalidStateTransitionError) as exc_info:
-        engine._transition_state(audit, InvestigationState.EXECUTING_TEST, "Skipping ahead")
+        engine._transition_state(
+            audit, InvestigationState.EXECUTING_TEST, "Skipping ahead"
+        )
     assert "PENDING" in str(exc_info.value) and "EXECUTING_TEST" in str(exc_info.value)
     assert audit.current_state == InvestigationState.PENDING
 
     # Direct jump from CONCLUDED back to EXECUTING_TEST is illegal
     audit.current_state = InvestigationState.CONCLUDED
     with pytest.raises(InvalidStateTransitionError) as exc_info:
-        engine._transition_state(audit, InvestigationState.EXECUTING_TEST, "Zombie test")
-    assert "CONCLUDED" in str(exc_info.value) and "EXECUTING_TEST" in str(exc_info.value)
+        engine._transition_state(
+            audit, InvestigationState.EXECUTING_TEST, "Zombie test"
+        )
+    assert "CONCLUDED" in str(exc_info.value) and "EXECUTING_TEST" in str(
+        exc_info.value
+    )
     assert audit.current_state == InvestigationState.CONCLUDED
 
 
 # =========================================================================
 # 2. Infinite-Loop Prevention (Budget, Duplicate Tests, Failure Limits)
 # =========================================================================
+
 
 @pytest.mark.asyncio
 async def test_infinite_loop_prevention_budget_exhaustion():
@@ -137,15 +149,31 @@ async def test_infinite_loop_prevention_budget_exhaustion():
     assert budget.steps_taken == 1
     assert len(result.audit_log.selected_tests) == 1
     assert result.audit_log.current_state == InvestigationState.CONCLUDED
-    assert any("exhausted" in e.payload.get("stop_reason", "").lower() or "conclusive" in e.payload.get("stop_reason", "").lower()
-               for e in result.audit_log.events if e.event_type == InvestigationEventType.INVESTIGATION_CONCLUDED)
+    assert any(
+        "exhausted" in e.payload.get("stop_reason", "").lower()
+        or "conclusive" in e.payload.get("stop_reason", "").lower()
+        for e in result.audit_log.events
+        if e.event_type == InvestigationEventType.INVESTIGATION_CONCLUDED
+    )
 
 
 def test_duplicate_test_signature_normalization():
     """Verify canonical signature normalization handles parameter order, whitespace, and defaults."""
-    sig1 = normalize_test_signature("probe_http", "http://localhost:8000/healthz", {"headers": {"accept": "json"}, "port": 8000})
-    sig2 = normalize_test_signature("probe_http", "http://localhost:8000/healthz", {"port": 8000, "headers": {"accept": "json"}})
-    sig3 = normalize_test_signature("probe_http", "http://localhost:8000/healthz/", {"port": 8000, "headers": {"accept": "json"}})
+    sig1 = normalize_test_signature(
+        "probe_http",
+        "http://localhost:8000/healthz",
+        {"headers": {"accept": "json"}, "port": 8000},
+    )
+    sig2 = normalize_test_signature(
+        "probe_http",
+        "http://localhost:8000/healthz",
+        {"port": 8000, "headers": {"accept": "json"}},
+    )
+    sig3 = normalize_test_signature(
+        "probe_http",
+        "http://localhost:8000/healthz/",
+        {"port": 8000, "headers": {"accept": "json"}},
+    )
 
     # Param order and trailing slash variations normalize to identical canonical representation
     assert sig1 == sig2
@@ -159,7 +187,7 @@ async def test_duplicate_test_detection_and_skipping():
     audit = AuditLog()
 
     # Pre-populate executed test
-    probe = SelectedTestRecord(
+    _probe = SelectedTestRecord(
         test_id="test-probe-1",
         tool_name="probe_http",
         target="/healthz",
@@ -207,12 +235,18 @@ async def test_duplicate_test_detection_and_skipping():
     budget = DiagnosticBudget(max_steps=5, max_cost=10)
 
     # Select next test; should skip /healthz because it was already executed, and select probe_tcp:8000
-    next_test = engine.select_next_test(hypotheses, facts, executed_tests, budget, audit=audit)
+    next_test = engine.select_next_test(
+        hypotheses, facts, executed_tests, budget, audit=audit
+    )
     assert next_test is not None
     assert next_test.tool_name == "probe_tcp"
 
     # Confirm DUPLICATE_TEST_SKIPPED event was logged for /healthz
-    duplicate_events = [e for e in audit.events if e.event_type == InvestigationEventType.DUPLICATE_TEST_SKIPPED]
+    duplicate_events = [
+        e
+        for e in audit.events
+        if e.event_type == InvestigationEventType.DUPLICATE_TEST_SKIPPED
+    ]
     assert len(duplicate_events) >= 1
     assert duplicate_events[0].payload.get("tool") == "probe_http"
     assert duplicate_events[0].payload.get("target") == "/healthz"
@@ -248,7 +282,9 @@ async def test_consecutive_failures_limit_halts_loop():
         description = "Always fails"
         timeout_seconds = 1.0
 
-        async def execute(self, target, parameters, project_root, simulated_context=None):
+        async def execute(
+            self, target, parameters, project_root, simulated_context=None
+        ):
             return DiagnosticToolResult(
                 tool_name=self.tool_name,
                 target=target,
@@ -264,7 +300,9 @@ async def test_consecutive_failures_limit_halts_loop():
 
     # Set budget with max_consecutive_failures=1
     fast_fail_budget = DiagnosticBudget(max_steps=5, max_consecutive_failures=1)
-    result = await engine.run_investigation(project_root=scenario_path, budget=fast_fail_budget)
+    result = await engine.run_investigation(
+        project_root=scenario_path, budget=fast_fail_budget
+    )
 
     # Must halt with max consecutive test failures in stop_reason
     assert "consecutive test failures" in result.audit_log.stop_reason.lower()
@@ -274,6 +312,7 @@ async def test_consecutive_failures_limit_halts_loop():
 # =========================================================================
 # 3. Per-Tool and Overall Wall-Clock Timeouts
 # =========================================================================
+
 
 class HangingTool(BaseDiagnosticTool):
     tool_name = "hanging_probe"
@@ -329,7 +368,9 @@ async def test_overall_budget_wall_clock_timeout():
 
     assert timeout_budget.is_expired() is True
 
-    result = await engine.run_investigation(project_root=scenario_path, budget=timeout_budget)
+    result = await engine.run_investigation(
+        project_root=scenario_path, budget=timeout_budget
+    )
 
     assert "timeout expired" in result.audit_log.stop_reason.lower()
     assert result.audit_log.current_state == InvestigationState.CONCLUDED
@@ -339,6 +380,7 @@ async def test_overall_budget_wall_clock_timeout():
 # 4. Cancellation (Token & Asyncio Task)
 # =========================================================================
 
+
 @pytest.mark.asyncio
 async def test_cancellation_via_token_before_start():
     """Verify that cancellation token set before execution halts immediately at initialization."""
@@ -346,14 +388,20 @@ async def test_cancellation_via_token_before_start():
     engine = DiagnosticEngine()
 
     token = {"cancelled": True}
-    result = await engine.run_investigation(project_root=scenario_path, cancellation_token=token)
+    result = await engine.run_investigation(
+        project_root=scenario_path, cancellation_token=token
+    )
 
     assert result.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
     assert result.audit_log.current_state == InvestigationState.CANCELLED
     assert "cancelled before execution" in result.audit_log.stop_reason.lower()
 
     # Event history includes cancellation
-    cancel_events = [e for e in result.audit_log.events if e.event_type == InvestigationEventType.CANCELLATION_REQUESTED]
+    cancel_events = [
+        e
+        for e in result.audit_log.events
+        if e.event_type == InvestigationEventType.CANCELLATION_REQUESTED
+    ]
     assert len(cancel_events) >= 1
 
 
@@ -373,7 +421,9 @@ async def test_cancellation_via_token_during_investigation():
 
     engine.select_next_test = cancel_on_select
 
-    result = await engine.run_investigation(project_root=scenario_path, cancellation_token=token)
+    result = await engine.run_investigation(
+        project_root=scenario_path, cancellation_token=token
+    )
 
     assert result.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE
     assert result.audit_log.current_state == InvestigationState.CANCELLED
@@ -398,12 +448,16 @@ async def test_cancellation_via_asyncio_task():
     # Should handle cancellation cleanly
     result = await run_and_cancel()
     # If the task finishes before or after cancel, check that engine handles without unhandled exceptions
-    assert result is None or result.audit_log.current_state in {InvestigationState.CANCELLED, InvestigationState.CONCLUDED}
+    assert result is None or result.audit_log.current_state in {
+        InvestigationState.CANCELLED,
+        InvestigationState.CONCLUDED,
+    }
 
 
 # =========================================================================
 # 5. Model/API Failure Recovery & Idempotent Retries
 # =========================================================================
+
 
 @pytest.mark.asyncio
 async def test_model_api_failure_recovery_and_fallback():
@@ -413,7 +467,9 @@ async def test_model_api_failure_recovery_and_fallback():
 
     # Mock LLM client to fail with NebiusError
     mock_llm = MagicMock()
-    mock_llm.generate_hypotheses = AsyncMock(side_effect=NebiusError("Nebius Service Unavailable (503)"))
+    mock_llm.generate_hypotheses = AsyncMock(
+        side_effect=NebiusError("Nebius Service Unavailable (503)")
+    )
     engine.llm_client = mock_llm
 
     result = await engine.run_investigation(project_root=scenario_path)
@@ -424,7 +480,11 @@ async def test_model_api_failure_recovery_and_fallback():
     assert any("DATABASE_URL" in h.description for h in result.hypotheses)
 
     # Verify MODEL_ERROR events were logged
-    model_errors = [e for e in result.audit_log.events if e.event_type == InvestigationEventType.MODEL_ERROR]
+    model_errors = [
+        e
+        for e in result.audit_log.events
+        if e.event_type == InvestigationEventType.MODEL_ERROR
+    ]
     assert len(model_errors) >= 1
     assert "503" in model_errors[0].payload.get("error", "")
 
@@ -439,7 +499,9 @@ async def test_malformed_model_output_fallback():
     engine = DiagnosticEngine()
 
     mock_llm = MagicMock()
-    mock_llm.generate_hypotheses = AsyncMock(side_effect=ValueError("Expecting value: line 1 column 1 (char 0)"))
+    mock_llm.generate_hypotheses = AsyncMock(
+        side_effect=ValueError("Expecting value: line 1 column 1 (char 0)")
+    )
     engine.llm_client = mock_llm
 
     result = await engine.run_investigation(project_root=scenario_path)
@@ -447,12 +509,15 @@ async def test_malformed_model_output_fallback():
     # Deterministic fallback handles Scenario C (port 8000 vs 5000)
     assert result.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE
     assert result.confidence >= 0.95
-    assert any("8000" in h.description and "5000" in h.description for h in result.hypotheses)
+    assert any(
+        "8000" in h.description and "5000" in h.description for h in result.hypotheses
+    )
 
 
 # =========================================================================
 # 6. Failed Tests Handling & Negative Evidence Integration
 # =========================================================================
+
 
 @pytest.mark.asyncio
 async def test_failed_test_recorded_as_negative_evidence():
@@ -470,7 +535,9 @@ async def test_failed_test_recorded_as_negative_evidence():
         description = "Simulates endpoint returning HTTP 404"
         timeout_seconds = 2.0
 
-        async def execute(self, target, parameters, project_root, simulated_context=None):
+        async def execute(
+            self, target, parameters, project_root, simulated_context=None
+        ):
             return DiagnosticToolResult(
                 tool_name=self.tool_name,
                 target=target,
@@ -489,12 +556,19 @@ async def test_failed_test_recorded_as_negative_evidence():
     result = await engine.run_investigation(project_root=scenario_path)
 
     # Must record TEST_FAILED event
-    failed_events = [e for e in result.audit_log.events if e.event_type == InvestigationEventType.TEST_FAILED]
+    failed_events = [
+        e
+        for e in result.audit_log.events
+        if e.event_type == InvestigationEventType.TEST_FAILED
+    ]
     assert len(failed_events) >= 1
     assert failed_events[0].payload.get("tool") == "probe_http"
 
     # Must register probe result in test_results with success=False
-    assert any(t.tool_name == "probe_http" and t.success is False for t in result.audit_log.test_results)
+    assert any(
+        t.tool_name == "probe_http" and t.success is False
+        for t in result.audit_log.test_results
+    )
 
     # Negative evidence is preserved in evidence list with ACTIVE_PROBE provenance
     probe_evidence = [e for e in result.evidence if e.provenance_type == "ACTIVE_PROBE"]
@@ -505,6 +579,7 @@ async def test_failed_test_recorded_as_negative_evidence():
 # =========================================================================
 # 7. Interrupted Investigations & Complete Event History
 # =========================================================================
+
 
 @pytest.mark.asyncio
 async def test_interrupted_investigation_preserves_event_history_and_evidence():
@@ -522,8 +597,13 @@ async def test_interrupted_investigation_preserves_event_history_and_evidence():
         engine.request_cancellation(token)
         return facts
 
-    with patch("backend.app.agent.engine.DeterministicFactAnalyzer.analyze_facts", side_effect=cancel_after_facts):
-        result = await engine.run_investigation(project_root=scenario_path, cancellation_token=token)
+    with patch(
+        "backend.app.agent.engine.DeterministicFactAnalyzer.analyze_facts",
+        side_effect=cancel_after_facts,
+    ):
+        result = await engine.run_investigation(
+            project_root=scenario_path, cancellation_token=token
+        )
 
     # Investigation cancelled cleanly
     assert result.audit_log.current_state == InvestigationState.CANCELLED
@@ -543,6 +623,7 @@ async def test_interrupted_investigation_preserves_event_history_and_evidence():
 # =========================================================================
 # 8. Verification Evidence Requirement for Fix Proposals
 # =========================================================================
+
 
 @pytest.mark.asyncio
 async def test_require_actual_verification_evidence_refuses_low_confidence():

@@ -9,16 +9,17 @@ Enforces:
 """
 
 from __future__ import annotations
+
 import difflib
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel
 
 from backend.app.core.models import (
-    DiagnosisStatus,
     DiagnoseHypothesis,
-    utc_now,
+    DiagnosisStatus,
 )
 from backend.app.evidence.collectors import ApprovedPathValidator, SecurityBoundaryError
 
@@ -35,21 +36,19 @@ APPROVED_PATCH_TARGETS = {
 # Dangerous commands or shell payloads that must never appear in proposed patches
 PROHIBITED_DIFF_PAYLOADS = re.compile(
     r"(rm\s+-rf|curl\s+.*\|\s*(?:bash|sh)|wget\s+.*\|\s*(?:bash|sh)|chmod\s+777|nc\s+-e|/dev/tcp/|mkfs)",
-    re.IGNORECASE
+    re.IGNORECASE,
 )
 
 
 class PatchSecurityError(Exception):
     """Raised when a patch proposal violates safety invariants."""
-    pass
 
 
 class InsufficientEvidenceError(Exception):
     """Raised when patch generation is attempted with inadequate evidence."""
-    pass
 
 
-def extract_env_var_info(text: str) -> Tuple[Optional[str], Optional[str]]:
+def extract_env_var_info(text: str) -> tuple[str | None, str | None]:
     """Extracts missing environment variable name and appropriate default value from diagnostic context."""
     if not text:
         return None, None
@@ -69,9 +68,18 @@ def extract_env_var_info(text: str) -> Tuple[Optional[str], Optional[str]]:
         # 3. Look for explicit mentions of common variable names (only when not a TCP ECONNREFUSED error)
         if not is_conn_refused:
             for known in [
-                "REDIS_URL", "DATABASE_URL", "SECRET_KEY", "JWT_SECRET", "API_KEY",
-                "RABBITMQ_URL", "MONGO_URI", "MONGODB_URI", "POSTGRES_URL",
-                "BACKEND_URL", "AUTH_TOKEN", "SESSION_SECRET"
+                "REDIS_URL",
+                "DATABASE_URL",
+                "SECRET_KEY",
+                "JWT_SECRET",
+                "API_KEY",
+                "RABBITMQ_URL",
+                "MONGO_URI",
+                "MONGODB_URI",
+                "POSTGRES_URL",
+                "BACKEND_URL",
+                "AUTH_TOKEN",
+                "SESSION_SECRET",
             ]:
                 if re.search(rf"\b{known}\b", text, re.IGNORECASE):
                     var_name = known
@@ -109,8 +117,8 @@ def evaluate_custom_patch_alignment(
     full_context: str,
     raw_logs: str = "",
     scenario_name: str = "custom-service",
-    explicit_diff: Optional[str] = None,
-) -> Dict[str, Any]:
+    explicit_diff: str | None = None,
+) -> dict[str, Any]:
     """Determines the candidate patch for a custom diagnosis and verifies whether the patch
     actually addresses the diagnosed root cause.
 
@@ -119,7 +127,6 @@ def evaluate_custom_patch_alignment(
     """
     combined = f"{raw_logs} {full_context}".strip()
     lower = combined.lower()
-    logs_lower = (raw_logs or full_context).lower()
 
     has_explicit_env_error = bool(
         re.search(r"keyerror[:\s]+['\"][a-z0-9_]+['\"]", combined, re.IGNORECASE)
@@ -143,15 +150,19 @@ def evaluate_custom_patch_alignment(
         extracted_var, extracted_val = extract_env_var_info(full_context)
 
     # 1. Missing Environment Variable diagnosis
-    if (extracted_var or has_explicit_env_error) and not (has_conn_refused and not has_explicit_env_error):
+    if (extracted_var or has_explicit_env_error) and not (
+        has_conn_refused and not has_explicit_env_error
+    ):
         effective_var = extracted_var or "DATABASE_URL"
-        effective_val = extracted_val or "postgresql://app_user:app_pass@localhost:5432/app_db"
+        effective_val = (
+            extracted_val or "postgresql://app_user:app_pass@localhost:5432/app_db"
+        )
         diff = explicit_diff or (
             "--- a/docker-compose.yml\n"
             "+++ b/docker-compose.yml\n"
             "@@ -7,6 +7,7 @@\n"
             "     ports:\n"
-            "       - \"8080:8080\"\n"
+            '       - "8080:8080"\n'
             "     environment:\n"
             f"+      - {effective_var}={effective_val}\n"
             "       - PORT=8080\n"
@@ -193,8 +204,8 @@ def evaluate_custom_patch_alignment(
             "+++ b/docker-compose.yml\n"
             "@@ -10,3 +10,3 @@\n"
             "     healthcheck:\n"
-            "-      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8000/health\"]\n"
-            "+      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8000/healthz\"]\n"
+            '-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]\n'
+            '+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]\n'
         )
         is_aligned = "/healthz" in diff
         return {
@@ -226,7 +237,7 @@ def evaluate_custom_patch_alignment(
             "--- a/main.py\n"
             "+++ b/main.py\n"
             "@@ -12,2 +12,2 @@\n"
-            "-RATE_LIMIT_BURST = \"unparsed_string\"\n"
+            '-RATE_LIMIT_BURST = "unparsed_string"\n'
             "+RATE_LIMIT_BURST = 100\n"
         )
         is_aligned = "RATE_LIMIT_BURST" in diff
@@ -255,13 +266,36 @@ def evaluate_custom_patch_alignment(
 
     # 4. Port Mapping Mismatch (8000:5000 -> 8000:8000) vs Unaligned Fallback (e.g. ECONNREFUSED 127.0.0.1:5432)
     has_dependency_port_refused = bool(
-        re.search(r"(?:127\.0\.0\.1|localhost|0\.0\.0\.0):(5432|6379|3306|27017|5672|9092|9200)", lower)
-        or (has_conn_refused and any(db in lower for db in ["postgres", "postgresql", "5432", "redis", "6379", "mysql", "mongo", "database", "db"]))
+        re.search(
+            r"(?:127\.0\.0\.1|localhost|0\.0\.0\.0):(5432|6379|3306|27017|5672|9092|9200)",
+            lower,
+        )
+        or (
+            has_conn_refused
+            and any(
+                db in lower
+                for db in [
+                    "postgres",
+                    "postgresql",
+                    "5432",
+                    "redis",
+                    "6379",
+                    "mysql",
+                    "mongo",
+                    "database",
+                    "db",
+                ]
+            )
+        )
     )
     is_genuine_port_mapping_mismatch = (
-        ("8000:5000" in lower or "scenario_c" in lower or ("port" in lower and ("forwarding" in lower or "mapping" in lower or "5000" in lower)))
-        and not has_dependency_port_refused
-    )
+        "8000:5000" in lower
+        or "scenario_c" in lower
+        or (
+            "port" in lower
+            and ("forwarding" in lower or "mapping" in lower or "5000" in lower)
+        )
+    ) and not has_dependency_port_refused
 
     if is_genuine_port_mapping_mismatch:
         diff = explicit_diff or (
@@ -269,8 +303,8 @@ def evaluate_custom_patch_alignment(
             "+++ b/docker-compose.yml\n"
             "@@ -8,2 +8,2 @@\n"
             "     ports:\n"
-            "-      - \"8000:5000\"\n"
-            "+      - \"8000:8000\"\n"
+            '-      - "8000:5000"\n'
+            '+      - "8000:8000"\n'
         )
         return {
             "category": "port_mismatch",
@@ -336,6 +370,7 @@ def evaluate_custom_patch_alignment(
 
 class PatchProposal(BaseModel):
     """Auditable reviewable patch proposal."""
+
     id: str
     hypothesis_id: str
     target_file: str
@@ -351,16 +386,16 @@ class PatchHunk(BaseModel):
     old_length: int
     new_start: int
     new_length: int
-    lines: List[str]
+    lines: list[str]
 
 
 class PurePythonDiffPatcher:
     """Applies unified diffs safely in memory or file without invoking external host tools."""
 
     @staticmethod
-    def parse_unified_diff(diff_text: str) -> List[PatchHunk]:
-        hunks: List[PatchHunk] = []
-        current_hunk: Optional[PatchHunk] = None
+    def parse_unified_diff(diff_text: str) -> list[PatchHunk]:
+        hunks: list[PatchHunk] = []
+        current_hunk: PatchHunk | None = None
 
         hunk_header_re = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
@@ -390,11 +425,17 @@ class PurePythonDiffPatcher:
         return hunks
 
     @classmethod
-    def apply_patch_to_text(cls, original_text: str, diff_text: str) -> Tuple[bool, str, str]:
+    def apply_patch_to_text(
+        cls, original_text: str, diff_text: str
+    ) -> tuple[bool, str, str]:
         """Applies unified diff to original text. Returns (success, new_text, error_message)."""
         hunks = cls.parse_unified_diff(diff_text)
         if not hunks:
-            return False, original_text, "Malformed or empty unified diff: no valid @@ hunks found"
+            return (
+                False,
+                original_text,
+                "Malformed or empty unified diff: no valid @@ hunks found",
+            )
 
         orig_lines = original_text.splitlines(keepends=True)
         # Normalize newlines
@@ -429,11 +470,15 @@ class PurePythonDiffPatcher:
 
             if actual_stripped != expected_stripped:
                 # Fallback: simple line replacement if single hunk mismatch
-                return False, original_text, f"Patch hunk failed to match at line {hunk.old_start}. Expected: {expected_stripped}, Found: {actual_stripped}"
+                return (
+                    False,
+                    original_text,
+                    f"Patch hunk failed to match at line {hunk.old_start}. Expected: {expected_stripped}, Found: {actual_stripped}",
+                )
 
             # Replace slice
             result_lines[hunk_idx : hunk_idx + len(expected_old)] = replacement
-            offset += (len(replacement) - len(expected_old))
+            offset += len(replacement) - len(expected_old)
 
         return True, "".join(result_lines), ""
 
@@ -442,21 +487,33 @@ class PatchValidator:
     """Validates proposed patches against strict security policies."""
 
     @staticmethod
-    def validate_patch(project_root: Path, proposal: PatchProposal) -> Tuple[bool, str]:
+    def validate_patch(project_root: Path, proposal: PatchProposal) -> tuple[bool, str]:
         # 1. Target file must be in approved allowlist
         target_name = Path(proposal.target_file).name
         if target_name not in APPROVED_PATCH_TARGETS:
-            return False, f"Target file '{proposal.target_file}' is not in the approved patch targets: {APPROVED_PATCH_TARGETS}"
+            return (
+                False,
+                f"Target file '{proposal.target_file}' is not in the approved patch targets: {APPROVED_PATCH_TARGETS}",
+            )
 
         # 2. Strict path traversal guard
         try:
-            target_path = ApprovedPathValidator.validate_and_resolve(project_root, proposal.target_file)
+            ApprovedPathValidator.validate_and_resolve(
+                project_root, proposal.target_file
+            )
         except SecurityBoundaryError as exc:
             return False, f"Security boundary violation in patch target path: {exc}"
 
         # 3. Disallow modifying sensitive files (.git, .env, secrets)
-        if ".env" in proposal.target_file or ".git" in proposal.target_file or ".pem" in proposal.target_file:
-            return False, f"Modifying sensitive configuration file '{proposal.target_file}' is strictly forbidden."
+        if (
+            ".env" in proposal.target_file
+            or ".git" in proposal.target_file
+            or ".pem" in proposal.target_file
+        ):
+            return (
+                False,
+                f"Modifying sensitive configuration file '{proposal.target_file}' is strictly forbidden.",
+            )
 
         # 4. Check for prohibited shell injection payloads inside diff text
         if PROHIBITED_DIFF_PAYLOADS.search(proposal.diff_unified):
@@ -464,7 +521,10 @@ class PatchValidator:
 
         # 5. Check unified diff structure
         if "@@" not in proposal.diff_unified or "---" not in proposal.diff_unified:
-            return False, "Proposed diff does not conform to standard unified diff format."
+            return (
+                False,
+                "Proposed diff does not conform to standard unified diff format.",
+            )
 
         return True, ""
 
@@ -481,7 +541,10 @@ class ControlledPatchGenerator:
     ) -> PatchProposal:
         """Generates a minimal unified diff based on the confirmed root cause hypothesis."""
         # 1. Require sufficient supporting evidence
-        if diagnosis_status != DiagnosisStatus.DIAGNOSIS_AVAILABLE or hypothesis.confidence < confidence_threshold:
+        if (
+            diagnosis_status != DiagnosisStatus.DIAGNOSIS_AVAILABLE
+            or hypothesis.confidence < confidence_threshold
+        ):
             raise InsufficientEvidenceError(
                 f"Cannot create patch: diagnosis status is '{diagnosis_status.value}' and confidence is {hypothesis.confidence:.2f} (threshold: {confidence_threshold:.2f})."
             )
@@ -491,9 +554,17 @@ class ControlledPatchGenerator:
         # Scenario A / Missing Environment Variable (DATABASE_URL, REDIS_URL, etc.)
         full_text = desc + " " + " ".join(hypothesis.supporting_evidence)
         extracted_var, extracted_val = extract_env_var_info(full_text)
-        if extracted_var or "database_url" in desc or "missing required environment" in desc or "environment" in desc or "keyerror" in desc:
+        if (
+            extracted_var
+            or "database_url" in desc
+            or "missing required environment" in desc
+            or "environment" in desc
+            or "keyerror" in desc
+        ):
             effective_var = extracted_var or "DATABASE_URL"
-            effective_val = extracted_val or "postgresql://app_user:app_pass@localhost:5432/app_db"
+            effective_val = (
+                extracted_val or "postgresql://app_user:app_pass@localhost:5432/app_db"
+            )
 
             compose_file = project_root / "docker-compose.yml"
             if not compose_file.exists():
@@ -519,12 +590,14 @@ class ControlledPatchGenerator:
             else:
                 new_content = old_content + f"{nl}    environment:{nl}{env_line}"
 
-            diff = "".join(difflib.unified_diff(
-                old_content.splitlines(keepends=True),
-                new_content.splitlines(keepends=True),
-                fromfile=f"a/{compose_file.name}",
-                tofile=f"b/{compose_file.name}",
-            ))
+            diff = "".join(
+                difflib.unified_diff(
+                    old_content.splitlines(keepends=True),
+                    new_content.splitlines(keepends=True),
+                    fromfile=f"a/{compose_file.name}",
+                    tofile=f"b/{compose_file.name}",
+                )
+            )
 
             return PatchProposal(
                 id=f"patch-missing-{effective_var.lower()}",
@@ -546,12 +619,14 @@ class ControlledPatchGenerator:
             old_content = compose_file.read_text(encoding="utf-8", errors="replace")
             new_content = old_content.replace("/health", "/healthz")
 
-            diff = "".join(difflib.unified_diff(
-                old_content.splitlines(keepends=True),
-                new_content.splitlines(keepends=True),
-                fromfile=f"a/{compose_file.name}",
-                tofile=f"b/{compose_file.name}",
-            ))
+            diff = "".join(
+                difflib.unified_diff(
+                    old_content.splitlines(keepends=True),
+                    new_content.splitlines(keepends=True),
+                    fromfile=f"a/{compose_file.name}",
+                    tofile=f"b/{compose_file.name}",
+                )
+            )
 
             return PatchProposal(
                 id="patch-healthcheck-1",
@@ -576,12 +651,14 @@ class ControlledPatchGenerator:
             if new_content == old_content:
                 new_content = old_content.replace("8000:5000", "8000:8000")
 
-            diff = "".join(difflib.unified_diff(
-                old_content.splitlines(keepends=True),
-                new_content.splitlines(keepends=True),
-                fromfile=f"a/{compose_file.name}",
-                tofile=f"b/{compose_file.name}",
-            ))
+            diff = "".join(
+                difflib.unified_diff(
+                    old_content.splitlines(keepends=True),
+                    new_content.splitlines(keepends=True),
+                    fromfile=f"a/{compose_file.name}",
+                    tofile=f"b/{compose_file.name}",
+                )
+            )
 
             return PatchProposal(
                 id="patch-port-mismatch-1",
@@ -601,14 +678,18 @@ class ControlledPatchGenerator:
                 raise FileNotFoundError("main.py not found in project root")
 
             old_content = main_file.read_text(encoding="utf-8", errors="replace")
-            new_content = old_content.replace('RATE_LIMIT_BURST = "unparsed_string"', "RATE_LIMIT_BURST = 100")
+            new_content = old_content.replace(
+                'RATE_LIMIT_BURST = "unparsed_string"', "RATE_LIMIT_BURST = 100"
+            )
 
-            diff = "".join(difflib.unified_diff(
-                old_content.splitlines(keepends=True),
-                new_content.splitlines(keepends=True),
-                fromfile=f"a/{main_file.name}",
-                tofile=f"b/{main_file.name}",
-            ))
+            diff = "".join(
+                difflib.unified_diff(
+                    old_content.splitlines(keepends=True),
+                    new_content.splitlines(keepends=True),
+                    fromfile=f"a/{main_file.name}",
+                    tofile=f"b/{main_file.name}",
+                )
+            )
 
             return PatchProposal(
                 id="patch-config-regression-1",
@@ -621,4 +702,6 @@ class ControlledPatchGenerator:
                 verification_procedure="verify_syntax",
             )
 
-        raise InsufficientEvidenceError(f"No minimal patch template available for hypothesis: '{desc}'")
+        raise InsufficientEvidenceError(
+            f"No minimal patch template available for hypothesis: '{desc}'"
+        )

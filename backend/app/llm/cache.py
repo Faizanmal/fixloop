@@ -8,10 +8,11 @@ CRITICAL ARCHITECTURAL CONSTRAINTS:
 """
 
 from __future__ import annotations
+
 import hashlib
 import threading
 from collections import OrderedDict
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 
 class SafeDeterministicCache:
@@ -32,7 +33,7 @@ class SafeDeterministicCache:
         payload = f"{model.strip()}::{system_prompt.strip()}::{user_prompt.strip()}"
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def get(self, model: str, system_prompt: str, user_prompt: str) -> Optional[str]:
+    def get(self, model: str, system_prompt: str, user_prompt: str) -> str | None:
         """Retrieves cached response if present. Updates LRU order and metrics."""
         key = self.compute_key(model, system_prompt, user_prompt)
         with self._lock:
@@ -48,7 +49,9 @@ class SafeDeterministicCache:
             self._misses += 1
             return None
 
-    def set(self, model: str, system_prompt: str, user_prompt: str, response: str) -> None:
+    def set(
+        self, model: str, system_prompt: str, user_prompt: str, response: str
+    ) -> None:
         """Stores a verified model response. Evicts oldest entry if capacity reached."""
         if not response or not response.strip():
             return
@@ -60,7 +63,7 @@ class SafeDeterministicCache:
             if len(self._cache) > self._max_entries:
                 self._cache.popitem(last=False)
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         """Returns empirical cache statistics."""
         with self._lock:
             total_lookups = self._hits + self._misses

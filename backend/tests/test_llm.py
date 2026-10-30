@@ -1,34 +1,37 @@
 """Tests for Nebius LLM Client, MockLLMProvider, structured parsing, and error mapping."""
 
 import json
-import pytest
+
 import httpx
+import pytest
+
 from backend.app.core.models import (
     DiagnoseRequest,
     DiagnoseResponse,
     DiagnosisStatus,
-    LLMHypothesisResponse,
-    LLMPatchResponse,
     HypothesisCategory,
-    DiagnosticProbeType,
+    LLMHypothesisResponse,
 )
 from backend.app.data.sample_reports import (
-    SAMPLE_HEALTHCHECK_FAILURE,
     MOCK_NEBIUS_HEALTHCHECK_RESPONSE,
+    SAMPLE_HEALTHCHECK_FAILURE,
 )
 from backend.app.llm.client import NebiusLLMClient, sanitize_message
 from backend.app.llm.exceptions import (
+    ModelResponseValidationError,
     NebiusAuthenticationError,
+    NebiusBillingError,
     NebiusModelNotFoundError,
     NebiusQuotaError,
-    NebiusBillingError,
-    NebiusTimeoutError,
-    ModelResponseValidationError,
-    NebiusServiceError,
 )
-from backend.app.llm.mock_provider import MockLLMProvider
-from backend.app.llm.parser import extract_json_from_llm_response, parse_structured_output
-from backend.app.llm.prompts import SOFTWARE_DEBUGGING_SYSTEM_PROMPT, build_diagnose_user_prompt
+from backend.app.llm.parser import (
+    extract_json_from_llm_response,
+    parse_structured_output,
+)
+from backend.app.llm.prompts import (
+    SOFTWARE_DEBUGGING_SYSTEM_PROMPT,
+    build_diagnose_user_prompt,
+)
 
 
 def test_software_debugging_system_prompt_rules():
@@ -67,7 +70,7 @@ def test_sanitize_message_strips_secrets():
 
 
 def test_extract_json_from_markdown():
-    raw_md = "Here is the response:\n```json\n{\"reasoning\": \"ok\", \"hypotheses\": [], \"needs_diagnostic_probe\": false}\n```\nHope that helps!"
+    raw_md = 'Here is the response:\n```json\n{"reasoning": "ok", "hypotheses": [], "needs_diagnostic_probe": false}\n```\nHope that helps!'
     extracted = extract_json_from_llm_response(raw_md)
     assert extracted.startswith("{")
     assert extracted.endswith("}")
@@ -83,6 +86,7 @@ def test_parse_structured_output():
 # =========================================================================
 # Integration Tests with Mocked HTTPX Transport (0 Credits Spent)
 # =========================================================================
+
 
 @pytest.mark.asyncio
 async def test_live_client_with_mocked_http_transport_success():
@@ -122,6 +126,7 @@ async def test_live_client_with_mocked_http_transport_success():
 @pytest.mark.asyncio
 async def test_client_error_mapping_401_auth_failure():
     """Verify HTTP 401 raises actionable NebiusAuthenticationError."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, text="Unauthorized: Invalid API key")
 
@@ -138,6 +143,7 @@ async def test_client_error_mapping_401_auth_failure():
 @pytest.mark.asyncio
 async def test_client_error_mapping_404_model_not_found():
     """Verify HTTP 404 raises actionable NebiusModelNotFoundError."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, text="Model not found")
 
@@ -153,6 +159,7 @@ async def test_client_error_mapping_404_model_not_found():
 @pytest.mark.asyncio
 async def test_client_error_mapping_429_quota():
     """Verify HTTP 429 raises actionable NebiusQuotaError."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(429, text="Rate limit exceeded")
 
@@ -167,6 +174,7 @@ async def test_client_error_mapping_429_quota():
 @pytest.mark.asyncio
 async def test_client_error_mapping_402_billing():
     """Verify HTTP 402 raises actionable NebiusBillingError."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(402, text="Payment Required")
 
@@ -188,9 +196,18 @@ async def test_client_retry_on_transient_503_recovers():
         attempts += 1
         if attempts == 1:
             return httpx.Response(503, text="Service Unavailable")
-        return httpx.Response(200, json={
-            "choices": [{"message": {"content": json.dumps(MOCK_NEBIUS_HEALTHCHECK_RESPONSE)}}]
-        })
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(MOCK_NEBIUS_HEALTHCHECK_RESPONSE)
+                        }
+                    }
+                ]
+            },
+        )
 
     client = NebiusLLMClient(transport=httpx.MockTransport(handler))
     req = DiagnoseRequest.model_validate(SAMPLE_HEALTHCHECK_FAILURE)
@@ -203,10 +220,16 @@ async def test_client_retry_on_transient_503_recovers():
 @pytest.mark.asyncio
 async def test_client_invalid_json_raises_model_response_validation_error():
     """Verify malformed JSON from model raises ModelResponseValidationError."""
+
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={
-            "choices": [{"message": {"content": "Sorry, I cannot diagnose this failure."}}]
-        })
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": "Sorry, I cannot diagnose this failure."}}
+                ]
+            },
+        )
 
     client = NebiusLLMClient(transport=httpx.MockTransport(handler))
     req = DiagnoseRequest(service_name="app", logs="error")

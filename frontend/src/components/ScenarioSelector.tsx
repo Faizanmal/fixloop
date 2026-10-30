@@ -64,7 +64,7 @@ function ActiveDiagnosticProgress({ onCancel, onRetry }: ActiveDiagnosticProgres
           />
         </div>
         <p className="text-[11px] text-slate-400 mt-2">
-          Deep LLM inference via Nebius typically takes 5–8s for container trace analysis (cached runs &lt;10ms). Engine will automatically timeout if VM does not respond within 90s.
+          Deep LLM inference via Nebius typically takes 5 to 45s for container trace analysis (cached runs &lt;10ms). Engine will automatically timeout if VM does not respond within 90s.
         </p>
       </div>
 

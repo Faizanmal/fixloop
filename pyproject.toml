@@ -14,3 +14,22 @@ minversion = "7.0"
 addopts = "-ra -q"
 testpaths = ["backend/tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "frontend",
+    "tmp",
+    "scratch",
+]
+
+[tool.ruff.lint]
+ignore = [
+    "BLE001",  # Autonomous diagnostic engine requires top-level fault tolerance for external probes, LLM calls, and Docker APIs
+    "E501",    # Line length enforced by formatter
+]

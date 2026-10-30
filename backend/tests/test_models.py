@@ -2,25 +2,21 @@
 
 import pytest
 from pydantic import ValidationError
+
 from backend.app.core.models import (
+    DiagnoseHypothesis,
+    DiagnoseResponse,
+    DiagnosisStatus,
+    DiagnosticAction,
+    DiagnosticActionStatus,
+    DiagnosticProbeType,
     EvidenceItem,
+    EvidenceRecord,
     EvidenceType,
     Hypothesis,
     HypothesisCategory,
-    DiagnosticAction,
-    DiagnosticProbeType,
-    DiagnosticActionStatus,
-    Patch,
-    VerificationResult,
-    VerificationStatus,
     InvestigationState,
     InvestigationStatus,
-    InvestigationOutcome,
-    DiagnosisStatus,
-    DiagnoseHypothesis,
-    DiagnoseResponse,
-    DiagnoseRequest,
-    EvidenceRecord,
     RecommendTest,
 )
 
@@ -78,16 +74,13 @@ def test_diagnose_hypothesis_bounds():
         supporting_evidence=["ev-1"],
         contradicting_evidence=[],
         confidence=0.92,
-        recommended_discriminating_test="HTTP_GET /healthz"
+        recommended_discriminating_test="HTTP_GET /healthz",
     )
     assert dh.confidence == 0.92
 
     # Invalid > 1.0
     with pytest.raises(ValidationError):
-        DiagnoseHypothesis(
-            description="Invalid",
-            confidence=1.1
-        )
+        DiagnoseHypothesis(description="Invalid", confidence=1.1)
 
 
 def test_diagnose_response_serialization():
@@ -100,14 +93,12 @@ def test_diagnose_response_serialization():
                 supporting_evidence=["ev-1"],
                 contradicting_evidence=[],
                 confidence=0.95,
-                recommended_discriminating_test="HTTP_GET /healthz"
+                recommended_discriminating_test="HTTP_GET /healthz",
             )
         ],
         evidence=[
             EvidenceRecord(
-                id="ev-1",
-                source="docker_inspect",
-                content="unhealthy status"
+                id="ev-1", source="docker_inspect", content="unhealthy status"
             )
         ],
         recommended_tests=[
@@ -116,12 +107,12 @@ def test_diagnose_response_serialization():
                 test_type="HTTP_GET",
                 target="/healthz",
                 description="Verify route",
-                expected_signal="200 OK"
+                expected_signal="200 OK",
             )
         ],
         missing_information=[],
         confidence=0.95,
-        next_action="Patch compose"
+        next_action="Patch compose",
     )
     json_bytes = resp.model_dump_json()
     reconstructed = DiagnoseResponse.model_validate_json(json_bytes)
@@ -168,4 +159,6 @@ def test_investigation_state_serialization():
     data_json = state.model_dump_json()
     reconstructed = InvestigationState.model_validate_json(data_json)
     assert reconstructed.id == "inv-test-1"
-    assert reconstructed.evidence_store[0].content == '{"Health": {"Status": "unhealthy"}}'
+    assert (
+        reconstructed.evidence_store[0].content == '{"Health": {"Status": "unhealthy"}}'
+    )

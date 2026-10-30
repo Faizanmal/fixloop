@@ -147,6 +147,7 @@ export interface VerificationReport {
 export interface SystemReadiness {
   ready: boolean;
   service: string;
+  isUnreachable?: boolean;
   nebius?: {
     api_key_configured: boolean;
     base_url: string;
@@ -322,11 +323,12 @@ class FixLoopApiClient {
       return {
         ready: false,
         service: "fixloop",
+        isUnreachable: true,
         nebius: {
           api_key_configured: false,
           model: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
           base_url: "https://api.tokenfactory.nebius.com/v1",
-          mock_mode: true,
+          mock_mode: false,
         },
         docker: {
           available: false,
@@ -358,7 +360,9 @@ class FixLoopApiClient {
   async runDiagnosis(
     scenarioName: string,
     customLogs?: string,
-    idempotencyKey?: string
+    idempotencyKey?: string,
+    investigationId?: string,
+    clientLastId?: string
   ): Promise<DiagnoseResponse> {
     const payload: Record<string, unknown> = customLogs
       ? { service_name: scenarioName, logs: customLogs }
@@ -366,49 +370,89 @@ class FixLoopApiClient {
     if (idempotencyKey) {
       payload.idempotency_key = idempotencyKey;
     }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 90000);
-
-    try {
-      const res = await fetch(`${this.baseUrl}/api/v1/diagnose`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const errorBody = await res.text();
-        let errorMsg = `Diagnosis failed with HTTP ${res.status}`;
-        try {
-          const parsed = JSON.parse(errorBody);
-          if (parsed.detail) {
-            errorMsg =
-              typeof parsed.detail === "string"
-                ? parsed.detail
-                : JSON.stringify(parsed.detail);
-          }
-        } catch {
-          if (errorBody) errorMsg = errorBody;
-        }
-        throw new Error(errorMsg);
-      }
-
-      return await res.json();
-    } catch (err: unknown) {
-      if (err instanceof Error && err.name === "AbortError") {
-        throw new Error(
-          "This is taking longer than expected (timed out after 90 seconds). Nebius inference or VM response delayed. Please click Retry."
-        );
-      }
-      throw err;
-    } finally {
-      clearTimeout(timeoutId);
+    if (investigationId) {
+      payload.investigation_id = investigationId;
     }
+    if (clientLastId) {
+      payload.client_last_id = clientLastId;
+    }
+    payload.async_mode = true;
+
+    // 1. Submit diagnosis start request
+    const res = await fetch(`${this.baseUrl}/api/v1/diagnose`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const errorBody = await res.text();
+      let errorMsg = `Diagnosis failed with HTTP ${res.status}`;
+      try {
+        const parsed = JSON.parse(errorBody);
+        if (parsed.detail) {
+          errorMsg =
+            typeof parsed.detail === "string"
+              ? parsed.detail
+              : JSON.stringify(parsed.detail);
+        }
+      } catch {
+        if (errorBody) errorMsg = errorBody;
+      }
+      throw new Error(errorMsg);
+    }
+
+    const initialData = await res.json();
+
+    // If result is already conclusive/complete (e.g. cached or sync completed), return directly
+    if (initialData.hypotheses && Array.isArray(initialData.hypotheses)) {
+      return initialData as DiagnoseResponse;
+    }
+
+    // 2. Poll for asynchronous background job completion with 90s ceiling
+    const targetInvId = (initialData.investigation_id as string) || investigationId;
+    if (!targetInvId) {
+      return initialData as DiagnoseResponse;
+    }
+
+    const pollStartTime = Date.now();
+    const POLLING_TIMEOUT_MS = 90000; // 90 seconds ceiling
+
+    while (Date.now() - pollStartTime < POLLING_TIMEOUT_MS) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      try {
+        const statusRes = await fetch(
+          `${this.baseUrl}/api/v1/diagnose/status/${encodeURIComponent(targetInvId)}`,
+          {
+            method: "GET",
+            headers: { Accept: "application/json" },
+            cache: "no-store",
+          }
+        );
+
+        if (statusRes.ok) {
+          const statusData = await statusRes.json();
+          if (statusData.status === "completed" && statusData.diagnosis) {
+            return statusData.diagnosis as DiagnoseResponse;
+          }
+          if (statusData.status === "failed") {
+            throw new Error(statusData.error || "Diagnosis failed");
+          }
+        }
+      } catch (pollErr: unknown) {
+        if (pollErr instanceof Error && pollErr.message.includes("Diagnosis failed")) {
+          throw pollErr;
+        }
+      }
+    }
+
+    throw new Error(
+      "This is taking longer than expected (timed out after 90 seconds). Nebius inference or VM response delayed. Please click Retry."
+    );
   }
 
   async fetchPatchProposal(scenarioName: string): Promise<PatchProposal | null> {
@@ -610,10 +654,7 @@ class FixLoopApiClient {
               (item.started_at as string) ||
               (item.started_at_iso as string) ||
               (item.created_at as string) ||
-              "";
-            const formattedTimestamp = startedAtRaw
-              ? new Date(startedAtRaw).toLocaleTimeString()
-              : "";
+              new Date().toISOString();
 
             const normalizedId = (item.id as string)?.toLowerCase() || `inv-${String(idx + 1).padStart(4, "0")}`;
 
@@ -626,7 +667,7 @@ class FixLoopApiClient {
               diagnosisDurationMs: (item.diagnosis_duration_ms as number) || null,
               verificationDurationMs: (item.verification_duration_ms as number) || null,
               lookupDurationMs: (item.lookup_duration_ms as number) || null,
-              timestamp: formattedTimestamp || (item.timestamp as string) || "",
+              timestamp: startedAtRaw,
               startedAtIso: startedAtRaw,
               isSample,
               isCached: Boolean(item.is_cached),

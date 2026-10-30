@@ -7,30 +7,33 @@ Never exposes API secrets in error messages or logs.
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 import httpx
 
 from backend.app.core.config import settings
 from backend.app.core.models import (
-    EvidenceItem,
-    Hypothesis,
-    LLMHypothesisResponse,
-    LLMPatchResponse,
     DiagnoseRequest,
     DiagnoseResponse,
-)
-from backend.app.llm.exceptions import (
-    NebiusError,
-    NebiusAuthenticationError,
-    NebiusModelNotFoundError,
-    NebiusQuotaError,
-    NebiusBillingError,
-    NebiusTimeoutError,
-    NebiusServiceError,
-    NebiusConnectionError,
-    ModelResponseValidationError,
+    DiagnosisStatus,
+    EvidenceItem,
+    Hypothesis,
+    HypothesisCategory,
+    LLMHypothesisResponse,
+    LLMPatchResponse,
 )
 from backend.app.llm.cache import llm_cache
+from backend.app.llm.exceptions import (
+    ModelResponseValidationError,
+    NebiusAuthenticationError,
+    NebiusBillingError,
+    NebiusConnectionError,
+    NebiusError,
+    NebiusModelNotFoundError,
+    NebiusQuotaError,
+    NebiusServiceError,
+    NebiusTimeoutError,
+)
 from backend.app.llm.mock_provider import MockLLMProvider
 from backend.app.llm.parser import parse_structured_output
 from backend.app.llm.prompts import (
@@ -49,7 +52,7 @@ logger = logging.getLogger("fixloop.llm")
 TRANSIENT_STATUS_CODES = {429, 502, 503, 504}
 
 
-def sanitize_message(text: str, secret_key: Optional[str] = None) -> str:
+def sanitize_message(text: str, secret_key: str | None = None) -> str:
     """Removes API keys and auth bearer tokens from error strings and logs."""
     if not text:
         return ""
@@ -57,6 +60,7 @@ def sanitize_message(text: str, secret_key: Optional[str] = None) -> str:
         text = text.replace(secret_key, "[REDACTED_API_KEY]")
     # Also strip generic Bearer patterns
     import re
+
     text = re.sub(r"Bearer\s+[A-Za-z0-9_\-\.]{8,}", "Bearer [REDACTED_TOKEN]", text)
     return text
 
@@ -64,7 +68,7 @@ def sanitize_message(text: str, secret_key: Optional[str] = None) -> str:
 class NebiusLLMClient:
     """Client for Nebius Token Factory with NVIDIA open-source models."""
 
-    def __init__(self, transport: Optional[httpx.AsyncBaseTransport] = None):
+    def __init__(self, transport: httpx.AsyncBaseTransport | None = None):
         self.api_key = settings.get_nebius_api_key()
         self.base_url = settings.normalized_nebius_base_url
         self.default_model = settings.NEBIUS_MODEL
@@ -90,9 +94,9 @@ class NebiusLLMClient:
         self,
         system_prompt: str,
         user_prompt: str,
-        model_override: Optional[str] = None,
+        model_override: str | None = None,
         max_tokens: int = 1024,
-        response_format: Optional[Dict[str, Any]] = None,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
         """Sends an OpenAI-compatible chat completion request to Nebius Token Factory.
 
@@ -109,7 +113,9 @@ class NebiusLLMClient:
                 return cached_result
 
         if self.use_mock and self._custom_transport is None:
-            raise RuntimeError("Mock mode active; live endpoint should not be queried directly")
+            raise RuntimeError(
+                "Mock mode active; live endpoint should not be queried directly"
+            )
 
         url = f"{self.base_url}/chat/completions"
         headers = {
@@ -128,7 +134,7 @@ class NebiusLLMClient:
             "response_format": response_format or {"type": "json_object"},
         }
 
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
 
         for attempt in range(self.max_retries + 1):
             async with self._create_http_client() as client:
@@ -139,17 +145,24 @@ class NebiusLLMClient:
                         data = response.json()
                         choices = data.get("choices", [])
                         if not choices or "message" not in choices[0]:
-                            raise ModelResponseValidationError("Nebius response missing 'choices[0].message'")
+                            raise ModelResponseValidationError(
+                                "Nebius response missing 'choices[0].message'"
+                            )
                         msg = choices[0]["message"]
                         content = msg.get("content") or ""
                         if not content and "reasoning" in msg and msg["reasoning"]:
-                            from backend.app.llm.parser import extract_json_from_llm_response
+                            from backend.app.llm.parser import (
+                                extract_json_from_llm_response,
+                            )
+
                             extracted = extract_json_from_llm_response(msg["reasoning"])
                             if extracted.startswith("{") and extracted.endswith("}"):
                                 content = extracted
                         sanitized = sanitize_message(content, self.api_key)
                         # Store in safe deterministic cache
-                        llm_cache.set(target_model, system_prompt, user_prompt, sanitized)
+                        llm_cache.set(
+                            target_model, system_prompt, user_prompt, sanitized
+                        )
                         return sanitized
 
                     # Classify non-200 responses
@@ -173,14 +186,24 @@ class NebiusLLMClient:
                         )
 
                     if status in TRANSIENT_STATUS_CODES:
-                        last_error = NebiusQuotaError(
-                            message=f"Nebius rate limit or transient error (HTTP {status}): {error_body}"
-                        ) if status == 429 else NebiusServiceError(
-                            upstream_status=status, detail=error_body
+                        last_error = (
+                            NebiusQuotaError(
+                                message=f"Nebius rate limit or transient error (HTTP {status}): {error_body}"
+                            )
+                            if status == 429
+                            else NebiusServiceError(
+                                upstream_status=status, detail=error_body
+                            )
                         )
                         if attempt < self.max_retries:
-                            backoff = 0.5 * (2 ** attempt)
-                            logger.info("Transient error HTTP %s. Retrying in %.2fs (attempt %d/%d)", status, backoff, attempt + 1, self.max_retries)
+                            backoff = 0.5 * (2**attempt)
+                            logger.info(
+                                "Transient error HTTP %s. Retrying in %.2fs (attempt %d/%d)",
+                                status,
+                                backoff,
+                                attempt + 1,
+                                self.max_retries,
+                            )
                             await asyncio.sleep(backoff)
                             continue
                         raise last_error
@@ -195,34 +218,42 @@ class NebiusLLMClient:
                 except httpx.ConnectTimeout as exc:
                     last_error = NebiusTimeoutError(settings.HTTPX_CONNECT_TIMEOUT)
                     if attempt < self.max_retries:
-                        await asyncio.sleep(0.5 * (2 ** attempt))
+                        await asyncio.sleep(0.5 * (2**attempt))
                         continue
                     raise last_error from exc
 
                 except httpx.ReadTimeout as exc:
                     last_error = NebiusTimeoutError(settings.HTTPX_READ_TIMEOUT)
                     if attempt < self.max_retries:
-                        await asyncio.sleep(0.5 * (2 ** attempt))
+                        await asyncio.sleep(0.5 * (2**attempt))
                         continue
                     raise last_error from exc
 
                 except (httpx.ConnectError, httpx.NetworkError) as exc:
                     safe_msg = sanitize_message(str(exc), self.api_key)
-                    last_error = NebiusConnectionError(base_url=self.base_url, detail=safe_msg)
+                    last_error = NebiusConnectionError(
+                        base_url=self.base_url, detail=safe_msg
+                    )
                     if attempt < self.max_retries:
-                        await asyncio.sleep(0.5 * (2 ** attempt))
+                        await asyncio.sleep(0.5 * (2**attempt))
                         continue
                     raise last_error from exc
 
         if last_error:
             raise last_error
-        raise NebiusError("Unexpected failure executing request to Nebius Token Factory.")
+        raise NebiusError(
+            "Unexpected failure executing request to Nebius Token Factory."
+        )
 
     async def diagnose(self, request: DiagnoseRequest) -> DiagnoseResponse:
         """Performs root-cause analysis on failing services with bounded context and trimming."""
         # Trim noisy logs and inspect dumps to eliminate context bloat
         trimmed_logs = EvidenceTrimmer.trim_logs(request.logs) if request.logs else None
-        trimmed_inspect = EvidenceTrimmer.trim_docker_inspect(request.docker_inspect) if request.docker_inspect else None
+        trimmed_inspect = (
+            EvidenceTrimmer.trim_docker_inspect(request.docker_inspect)
+            if request.docker_inspect
+            else None
+        )
 
         user_prompt = build_diagnose_user_prompt(
             service_name=request.service_name or "service",
@@ -236,7 +267,9 @@ class NebiusLLMClient:
 
         # Safe Deterministic Cache check (bypassed if test transport is explicitly injected)
         if self._custom_transport is None:
-            cached = llm_cache.get(target_model, SOFTWARE_DEBUGGING_SYSTEM_PROMPT, user_prompt)
+            cached = llm_cache.get(
+                target_model, SOFTWARE_DEBUGGING_SYSTEM_PROMPT, user_prompt
+            )
             if cached:
                 logger.info("Safe cache hit for diagnose request (%s)", target_model)
                 return parse_structured_output(cached, DiagnoseResponse)
@@ -245,7 +278,12 @@ class NebiusLLMClient:
         if self.use_mock and self._custom_transport is None:
             logger.info("Using MockLLMProvider for diagnosis (Mock/Offline mode)")
             mock_res = MockLLMProvider.diagnose(request)
-            llm_cache.set(target_model, SOFTWARE_DEBUGGING_SYSTEM_PROMPT, user_prompt, mock_res.model_dump_json())
+            llm_cache.set(
+                target_model,
+                SOFTWARE_DEBUGGING_SYSTEM_PROMPT,
+                user_prompt,
+                mock_res.model_dump_json(),
+            )
             return mock_res
 
         raw_output = await self._call_chat_completion(
@@ -263,12 +301,22 @@ class NebiusLLMClient:
         scenario_name: str,
         iteration: int,
         max_iterations: int,
-        evidence: List[EvidenceItem],
-        current_hypotheses: List[Hypothesis],
+        evidence: list[EvidenceItem],
+        current_hypotheses: list[Hypothesis],
     ) -> LLMHypothesisResponse:
         """Formulates or updates diagnostic hypotheses using trimmed, bounded context."""
-        evidence_str = EvidenceTrimmer.trim_and_bound_evidence(evidence, max_total_chars=2200)
-        hypotheses_str = "\n".join([f"[{h.id}] {h.title} (conf: {h.confidence_score}): {h.description}" for h in current_hypotheses]) or "None yet"
+        evidence_str = EvidenceTrimmer.trim_and_bound_evidence(
+            evidence, max_total_chars=2200
+        )
+        hypotheses_str = (
+            "\n".join(
+                [
+                    f"[{h.id}] {h.title} (conf: {h.confidence_score}): {h.description}"
+                    for h in current_hypotheses
+                ]
+            )
+            or "None yet"
+        )
 
         prompt = USER_HYPOTHESIS_TEMPLATE.format(
             scenario_name=scenario_name,
@@ -282,13 +330,22 @@ class NebiusLLMClient:
         if self._custom_transport is None:
             cached = llm_cache.get(self.default_model, SYSTEM_HYPOTHESIS_PROMPT, prompt)
             if cached:
-                logger.info("Safe cache hit for hypothesis generation: %s", self.default_model)
+                logger.info(
+                    "Safe cache hit for hypothesis generation: %s", self.default_model
+                )
                 return parse_structured_output(cached, LLMHypothesisResponse)
 
         if self.use_mock and self._custom_transport is None:
             logger.info("Using MockLLMProvider for hypotheses (Mock/Offline mode)")
-            resp = MockLLMProvider.get_hypotheses_for_scenario(scenario_name, iteration, evidence)
-            llm_cache.set(self.default_model, SYSTEM_HYPOTHESIS_PROMPT, prompt, resp.model_dump_json())
+            resp = MockLLMProvider.get_hypotheses_for_scenario(
+                scenario_name, iteration, evidence
+            )
+            llm_cache.set(
+                self.default_model,
+                SYSTEM_HYPOTHESIS_PROMPT,
+                prompt,
+                resp.model_dump_json(),
+            )
             return resp
 
         raw_output = await self._call_chat_completion(
@@ -316,7 +373,8 @@ class NebiusLLMClient:
                 ]
                 return LLMHypothesisResponse(
                     reasoning=diag.summary,
-                    hypotheses=mapped_hyps or [
+                    hypotheses=mapped_hyps
+                    or [
                         Hypothesis(
                             id="hyp-1",
                             title="Identified Root Cause",
@@ -325,8 +383,10 @@ class NebiusLLMClient:
                             confidence_score=diag.confidence,
                         )
                     ],
-                    needs_diagnostic_probe=diag.status == DiagnosisStatus.INSUFFICIENT_EVIDENCE,
-                    is_evidence_sufficient=diag.status == DiagnosisStatus.DIAGNOSIS_AVAILABLE,
+                    needs_diagnostic_probe=diag.status
+                    == DiagnosisStatus.INSUFFICIENT_EVIDENCE,
+                    is_evidence_sufficient=diag.status
+                    == DiagnosisStatus.DIAGNOSIS_AVAILABLE,
                 )
             except Exception:
                 return parse_structured_output(raw_output, LLMHypothesisResponse)
@@ -335,11 +395,13 @@ class NebiusLLMClient:
         self,
         scenario_name: str,
         hypothesis: Hypothesis,
-        evidence: List[EvidenceItem],
+        evidence: list[EvidenceItem],
         files_content: str,
     ) -> LLMPatchResponse:
         """Synthesizes a minimal unified diff for a confirmed hypothesis using bounded context."""
-        evidence_str = EvidenceTrimmer.trim_and_bound_evidence(evidence, max_total_chars=1800)
+        evidence_str = EvidenceTrimmer.trim_and_bound_evidence(
+            evidence, max_total_chars=1800
+        )
         prompt = USER_PATCH_TEMPLATE.format(
             hypothesis_title=hypothesis.title,
             hypothesis_description=hypothesis.description,
@@ -351,13 +413,20 @@ class NebiusLLMClient:
         if self._custom_transport is None:
             cached = llm_cache.get(self.default_model, SYSTEM_PATCH_PROMPT, prompt)
             if cached:
-                logger.info("Safe cache hit for patch synthesis: %s", self.default_model)
+                logger.info(
+                    "Safe cache hit for patch synthesis: %s", self.default_model
+                )
                 return parse_structured_output(cached, LLMPatchResponse)
 
         if self.use_mock and self._custom_transport is None:
             logger.info("Using MockLLMProvider for patch synthesis (Mock/Offline mode)")
             mock_patch = MockLLMProvider.get_patch_for_scenario(scenario_name)
-            llm_cache.set(self.default_model, SYSTEM_PATCH_PROMPT, prompt, mock_patch.model_dump_json())
+            llm_cache.set(
+                self.default_model,
+                SYSTEM_PATCH_PROMPT,
+                prompt,
+                mock_patch.model_dump_json(),
+            )
             return mock_patch
 
         raw_output = await self._call_chat_completion(
@@ -368,7 +437,7 @@ class NebiusLLMClient:
         )
         return parse_structured_output(raw_output, LLMPatchResponse)
 
-    async def verify_credentials_and_model(self) -> Dict[str, Any]:
+    async def verify_credentials_and_model(self) -> dict[str, Any]:
         """Validates that the Nebius API key is authentic and the target model is accessible."""
         if self.use_mock and self._custom_transport is None:
             return {
@@ -388,8 +457,14 @@ class NebiusLLMClient:
                 response = await client.get(url, headers=headers)
                 if response.status_code == 200:
                     data = response.json()
-                    model_list = [m.get("id") for m in data.get("data", [])] if isinstance(data, dict) else []
-                    model_found = (self.default_model in model_list) if model_list else True
+                    model_list = (
+                        [m.get("id") for m in data.get("data", [])]
+                        if isinstance(data, dict)
+                        else []
+                    )
+                    model_found = (
+                        (self.default_model in model_list) if model_list else True
+                    )
                     return {
                         "verified": True,
                         "mode": "live",
